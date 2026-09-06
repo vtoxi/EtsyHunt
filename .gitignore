@@ -1,0 +1,26 @@
+# OS / editor
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*~
+.idea/
+.vscode/
+*.code-workspace
+
+# Secrets / local env
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+credentials.json
+service-account*.json
+
+# Logs / build junk
+*.log
+npm-debug.log*
+node_modules/
+dist/
+build/
+.cache/
