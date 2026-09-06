@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EtsyHunt Privacy Policy</title>
+  <style>
+    :root { --ink:#14110f; --mute:#5c554c; --line:#e6e0d6; --paper:#f7f3ec; --amber:#b45309; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: "Segoe UI", Avenir, Helvetica, Arial, sans-serif; background:var(--paper); color:var(--ink); line-height:1.55; }
+    main { max-width:720px; margin:0 auto; padding:40px 20px 64px; }
+    h1 { font-size:1.75rem; letter-spacing:-.02em; margin:0 0 8px; }
+    .meta { color:var(--mute); font-size:.95rem; margin-bottom:28px; }
+    h2 { font-size:1.15rem; margin:28px 0 10px; }
+    p, li { color:#2a241e; }
+    ul { padding-left:1.2rem; }
+    table { width:100%; border-collapse:collapse; font-size:.92rem; margin:12px 0 8px; }
+    th, td { border:1px solid var(--line); padding:8px 10px; text-align:left; vertical-align:top; background:#fff; }
+    th { background:#efe8dc; }
+    a { color:var(--amber); }
+    .box { background:#fff; border:1px solid var(--line); border-radius:12px; padding:16px 18px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>EtsyHunt Privacy Policy</h1>
+    <p class="meta">Last updated: September 6, 2026</p>
+
+    <div class="box">
+      <p><strong>EtsyHunt</strong> is a free Chrome extension for local Etsy niche research. It is designed so your research data stays on your device. It does not require an EtsyHunt account and does not sell your data.</p>
+    </div>
+
+    <h2>Data stored locally</h2>
+    <p>The extension may store the following in Chrome local storage on your computer:</p>
+    <ul>
+      <li>Seed keywords you enter</li>
+      <li>Settings you configure</li>
+      <li>Research results from runs you start (keywords, listing metadata, scores, activity logs)</li>
+      <li>Run history and timestamps</li>
+    </ul>
+    <p>Clearing extension data or uninstalling EtsyHunt removes this data.</p>
+
+    <h2>Website content accessed during research</h2>
+    <p>When you start a run, EtsyHunt may open tabs and read publicly visible content from:</p>
+    <ul>
+      <li><strong>etsy.com</strong> — keyword discovery, search snapshots, listing audits</li>
+      <li><strong>members.erank.com</strong> — only for the optional legacy eRank workflow, and only if you are logged into eRank in Chrome</li>
+    </ul>
+    <p>That content is processed locally to build your niche report. EtsyHunt does not upload those results to an EtsyHunt server.</p>
+
+    <h2>Downloads</h2>
+    <p>The extension may save HTML reports and exported JSON logs to your Downloads folder when a run finishes, when a report is generated, or when you click Export.</p>
+
+    <h2>Permissions</h2>
+    <table>
+      <thead><tr><th>Permission</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr><td>storage</td><td>Save settings and local research data</td></tr>
+        <tr><td>tabs</td><td>Open and control research tabs</td></tr>
+        <tr><td>scripting</td><td>Helpers for the optional eRank workflow</td></tr>
+        <tr><td>alarms</td><td>Keep long runs alive under Manifest V3</td></tr>
+        <tr><td>downloads</td><td>Save reports and exported logs</td></tr>
+        <tr><td>Host access (Etsy / eRank)</td><td>Read pages only during research runs you start</td></tr>
+      </tbody>
+    </table>
+
+    <h2>What we do not do</h2>
+    <ul>
+      <li>No EtsyHunt signup requirement</li>
+      <li>No selling or renting personal data</li>
+      <li>No advertising use of your research data</li>
+      <li>No tracking of browsing outside runs you start</li>
+      <li>No default analytics or telemetry to EtsyHunt</li>
+    </ul>
+
+    <h2>Third parties</h2>
+    <p>Etsy and eRank are independent services. Your use of those sites is governed by their own policies.</p>
+
+    <h2>Contact</h2>
+    <p>Questions: open an issue on <a href="https://github.com/vtoxi/EtsyHunt">github.com/vtoxi/EtsyHunt</a>.</p>
+  </main>
+</body>
+</html>

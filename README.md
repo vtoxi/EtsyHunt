@@ -2,6 +2,8 @@
 
 Free Chrome extension for Etsy niche research. Discover keywords, capture search snapshots, audit listings, and generate scored HTML reports — all from your browser. No account. No license. Data stays on your device.
 
+**Privacy policy:** https://github.com/vtoxi/EtsyHunt/blob/main/PRIVACY.md
+
 ## Features
 
 - **4-step pipeline** — keyword discovery → Etsy snapshots → listing audit → niche scoring
@@ -10,13 +12,23 @@ Free Chrome extension for Etsy niche research. Discover keywords, capture search
 - **Configurable** — keywords per run, delays, beatable-shop thresholds, and more
 - **Free & open source** — use it, fork it, improve it
 
-## Install
+## Install (developer / sideload)
 
 1. Download or clone this repository
 2. Open Chrome and go to `chrome://extensions`
 3. Turn on **Developer mode**
 4. Click **Load unpacked** and select this folder
 5. Pin **EtsyHunt** to your toolbar
+
+## Package for Chrome Web Store
+
+```powershell
+.\scripts\package.ps1
+```
+
+Upload the ZIP from `dist/` in the [Chrome Web Store Developer Dashboard](https://chrome.google.com/webstore/devconsole).
+
+Full listing copy, permission justifications, and privacy checklist: [`store/LISTING.md`](store/LISTING.md).
 
 ## Quick start
 
@@ -53,6 +65,8 @@ Open **Advanced settings** in the popup:
 ## Privacy
 
 EtsyHunt does not require login to a third-party dashboard. Pipeline data (keywords, listings, audits, scores) lives in `chrome.storage.local`. Clearing extension data or uninstalling removes it. Use **Export** in the activity log to back up run history as JSON.
+
+Full policy: [PRIVACY.md](PRIVACY.md) · [privacy.html](privacy.html)
 
 ## Troubleshooting
 

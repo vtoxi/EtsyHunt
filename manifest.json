@@ -1,34 +1,28 @@
 {
   "manifest_version": 3,
-  "name": "EtsyHunt",
+  "name": "EtsyHunt — Etsy Niche Research",
+  "short_name": "EtsyHunt",
   "version": "1.0.0",
-  "description": "Free local Etsy niche research — discover keywords, capture search snapshots, audit listings, and score niches. All data stays in your browser.",
+  "description": "Free local Etsy niche research: find keywords, audit listings, and download scored niche reports.",
+  "author": "EtsyHunt",
+  "homepage_url": "https://github.com/vtoxi/EtsyHunt",
+  "minimum_chrome_version": "114",
   "permissions": [
     "storage",
     "tabs",
-    "activeTab",
     "scripting",
     "alarms",
     "downloads"
   ],
   "host_permissions": [
-    "https://members.erank.com/*",
-    "https://www.etsy.com/*"
+    "https://www.etsy.com/*",
+    "https://members.erank.com/*"
   ],
   "background": {
     "service_worker": "src/background/service-worker.js",
     "type": "module"
   },
   "content_scripts": [
-    {
-      "matches": [
-        "https://members.erank.com/*"
-      ],
-      "js": [
-        "src/content-scripts/erank-keyword-extractor.js"
-      ],
-      "run_at": "document_idle"
-    },
     {
       "matches": [
         "https://www.etsy.com/*"
@@ -38,19 +32,30 @@
         "src/content-scripts/etsy-listing-extractor.js"
       ],
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://members.erank.com/*"
+      ],
+      "js": [
+        "src/content-scripts/erank-keyword-extractor.js"
+      ],
+      "run_at": "document_idle"
     }
   ],
   "action": {
     "default_popup": "src/popup/popup.html",
-    "default_title": "EtsyHunt — Free Etsy Niche Research",
+    "default_title": "EtsyHunt",
     "default_icon": {
       "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
       "48": "icons/icon48.png",
       "128": "icons/icon128.png"
     }
   },
   "icons": {
     "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   }
