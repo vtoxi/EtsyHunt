@@ -1,6 +1,6 @@
 # Privacy Policy — EtsyHunt
 
-**Last updated:** September 6, 2026
+**Last updated:** September 7, 2026
 
 EtsyHunt (“the Extension”) is a free Chrome extension for local Etsy niche research.
 
@@ -52,11 +52,17 @@ EtsyHunt does not:
 - Sell or rent personal data
 - Use your research data for advertising
 - Track browsing outside the research workflow you start
-- Send analytics, crash reports, or telemetry to us by default
+- Send analytics, crash reports, or telemetry from inside the Extension itself
+
+## Analytics on this website
+
+This privacy policy webpage (not the Extension) uses Google Analytics to understand visits to the page itself — approximate location, device/browser type, and referral source. Google Analytics uses cookies and may collect your IP address. This applies only to your browser visiting the webpage version of this policy; the EtsyHunt Chrome extension does not send any analytics or telemetry.
+
+You can opt out using the [Google Analytics Opt-out Browser Add-on](https://tools.google.com/dlpage/gaoptout), or a browser/extension that blocks tracking scripts. See [Google's Privacy Policy](https://policies.google.com/privacy) for details.
 
 ## Third-party services
 
-Etsy and eRank are independent services. Your use of those sites is governed by their own terms and privacy policies. EtsyHunt does not control those services.
+Etsy and eRank are independent services. Your use of those sites is governed by their own terms and privacy policies. EtsyHunt does not control those services. Google Analytics (used only on the webpage version of this policy) is governed by Google's privacy policy, linked above.
 
 ## Children’s privacy
 

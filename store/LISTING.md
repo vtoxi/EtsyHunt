@@ -128,15 +128,16 @@ https://www.etsy.com/* is required to open Etsy search and listing pages and ext
 
 ## Screenshots (ready to upload)
 
-All files are **1280×800 JPEG (24-bit, no alpha)** in `store/screenshots/`:
+All files are **1280×800 PNG (no alpha)** in `store/screenshots/`, rendered from the real popup UI
+(not mockups) — see `_src/README.md` to regenerate after a UI change:
 
 | # | File | Shows |
 |---|------|--------|
-| 1 | `01-start-research.jpg` | Seed keyword + Run full research |
-| 2 | `02-research-in-progress.jpg` | Live progress + activity log |
-| 3 | `03-steps-and-settings.jpg` | Single-step controls + settings |
-| 4 | `04-completed-report.jpg` | Completed run + GO verdict |
-| 5 | `05-feature-overview.jpg` | Feature overview cards |
+| 1 | `01-start-research.png` | Seed keyword + Run full research |
+| 2 | `02-research-in-progress.png` | Live progress + activity log |
+| 3 | `03-steps-and-settings.png` | Single-step controls + advanced settings |
+| 4 | `04-completed-report.png` | Completed run, GO verdict, **Resume research** + **report history** (new in 1.1.0) |
+| 5 | `05-feature-overview.png` | Feature overview cards, incl. Stop/save/resume |
 
 Upload all 5 in the Chrome Web Store listing (order above).
 
@@ -144,10 +145,10 @@ Upload all 5 in the Chrome Web Store listing (order above).
 
 | Tile | Size | File |
 |------|------|------|
-| Small promo | 440×280 | `promo-small-440x280.jpg` |
-| Marquee promo | 1400×560 | `promo-marquee-1400x560.jpg` |
+| Small promo | 440×280 | `promo-small-440x280.png` |
+| Marquee promo | 1400×560 | `promo-marquee-1400x560.png` |
 
-Both are **24-bit JPEG (no alpha)** in `store/screenshots/`.
+Both are **PNG (no alpha)** in `store/screenshots/`.
 
 ## Package for upload
 
