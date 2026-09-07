@@ -29,6 +29,8 @@ Run a 4-step pipeline from one seed keyword:
 3. Audit listing pages for sales and social-proof signals
 4. Score the niche and download an HTML report
 
+Need to leave mid-run? Use **Stop & save report** to keep a partial report from whatever is already complete, or **Resume research** later from the last finished step.
+
 Everything is local-first. Your research data stays in your browser. No EtsyHunt account. No license key.
 
 Features:
@@ -36,14 +38,15 @@ Features:
 • Digital / Physical / Any product-type filter
 • Configurable keyword limits, delays, and beatable-shop thresholds
 • Activity log with copy / export
-• Downloadable niche reports
+• Downloadable niche reports (full or partial if you stop early)
+• Resume research after stopping mid-run
 
 How to use:
 1. Install EtsyHunt and pin it
 2. Enter a seed keyword (for example: tote bag)
 3. Choose product type
 4. Click Run full research
-5. Open the downloaded HTML report when the run finishes
+5. Open the downloaded HTML report when the run finishes (or stop early and open the partial report from the popup)
 
 Notes:
 • Runs can take 30–60 minutes depending on your settings
@@ -72,40 +75,79 @@ Declare accurately:
 Remote code: No  
 Single purpose: Etsy niche research automation
 
-## Permission justifications (paste into store form)
+## Privacy practices — paste-ready answers
+
+### Single purpose description
+Helps Etsy sellers research niches by discovering keywords, capturing Etsy search and listing data, scoring opportunities, and downloading local HTML reports.
+
+### Remote code use
+No. EtsyHunt does not use remote code. All JavaScript is packaged inside the extension. It does not download or execute scripts from the network. It only reads publicly visible page content on Etsy (and optionally eRank) during research runs the user starts, and stores results locally.
+
+### storage
+Stores the user’s settings, seed keywords, research results (keywords, listings, scores), and activity logs in chrome.storage.local on the user’s device so runs can continue and reports can be generated without a remote database.
+
+### tabs
+Creates and controls browser tabs used during a research run the user starts, so the extension can open Etsy (and optionally eRank) pages, wait for them to load, and collect publicly visible niche research data.
+
+### scripting
+Used only for the optional legacy eRank keyword workflow, to inject or ensure the content script is available on members.erank.com pages when that workflow is enabled.
+
+### alarms
+Keeps the Manifest V3 service worker alive during long multi-step research runs. Without alarms, Chrome can suspend the worker mid-pipeline and stop the run.
+
+### downloads
+Saves generated HTML niche reports (full or partial) to the user’s Downloads folder when a run finishes or is stopped with “Stop & save report”, and saves JSON log exports when the user clicks Export.
+
+### Host permissions
+https://www.etsy.com/* — Required to open Etsy search and listing pages and extract publicly visible niche research signals during user-started runs.
+
+https://members.erank.com/* — Optional legacy keyword workflow only. Used when that mode is enabled and the user is already logged into eRank in Chrome.
+
+### Certification checkbox
+Certify that your data usage complies with the Chrome Web Store Developer Program Policies (Limited Use). Check yes. EtsyHunt does not sell user data and does not use research data for advertising.
+
+## Permission justifications (same text as above, split by field)
 
 **storage**  
-Stores user settings, seed keywords, local research results, and run logs on the device so the pipeline can continue and reports can be generated without a remote database.
+Stores the user’s settings, seed keywords, research results (keywords, listings, scores), and activity logs in chrome.storage.local on the user’s device so runs can continue and reports can be generated without a remote database.
 
 **tabs**  
-Creates and navigates background tabs to Etsy (and optionally eRank) to collect search and listing data during a research run the user starts.
+Creates and controls browser tabs used during a research run the user starts, so the extension can open Etsy (and optionally eRank) pages, wait for them to load, and collect publicly visible niche research data.
 
 **scripting**  
-Used only for the optional legacy eRank keyword workflow to ensure the content script is available on eRank pages when needed.
+Used only for the optional legacy eRank keyword workflow, to inject or ensure the content script is available on members.erank.com pages when that workflow is enabled.
 
 **alarms**  
-Keeps the Manifest V3 service worker alive during long multi-step research runs so Chrome does not suspend the worker mid-pipeline.
+Keeps the Manifest V3 service worker alive during long multi-step research runs. Without alarms, Chrome can suspend the worker mid-pipeline and stop the run.
 
 **downloads**  
-Saves generated HTML niche reports and user-requested JSON log exports to the user’s Downloads folder.
+Saves generated HTML niche reports (full or partial) to the user’s Downloads folder when a run finishes or is stopped with “Stop & save report”, and saves JSON log exports when the user clicks Export.
 
-**Host permission: https://www.etsy.com/***  
-Required to open Etsy search and listing pages and extract publicly visible niche research signals during user-started runs.
+**Host permission**  
+https://www.etsy.com/* is required to open Etsy search and listing pages and extract publicly visible niche research signals during user-started runs. https://members.erank.com/* is for the optional legacy eRank keyword workflow only, when that mode is enabled and the user is logged into eRank.
 
-**Host permission: https://members.erank.com/***  
-Optional legacy keyword workflow. Used only when that workflow is enabled and the user is logged into eRank.
+## Screenshots (ready to upload)
 
-## Screenshots (you must capture)
+All files are **1280×800 JPEG (24-bit, no alpha)** in `store/screenshots/`:
 
-Chrome requires 1–5 screenshots:
+| # | File | Shows |
+|---|------|--------|
+| 1 | `01-start-research.jpg` | Seed keyword + Run full research |
+| 2 | `02-research-in-progress.jpg` | Live progress + activity log |
+| 3 | `03-steps-and-settings.jpg` | Single-step controls + settings |
+| 4 | `04-completed-report.jpg` | Completed run + GO verdict |
+| 5 | `05-feature-overview.jpg` | Feature overview cards |
 
-- Size: **1280×800** or **640×400** PNG/JPEG
-- Show the real popup UI (seed input, run button, progress, activity log)
-- Optional: a finished HTML report window
+Upload all 5 in the Chrome Web Store listing (order above).
 
-Tip: open the extension popup, use Windows Snipping Tool / ShareX, then pad/crop to exact size.
+## Promo tiles (ready to upload)
 
-Place finished images in `store/screenshots/` (not required inside the ZIP).
+| Tile | Size | File |
+|------|------|------|
+| Small promo | 440×280 | `promo-small-440x280.jpg` |
+| Marquee promo | 1400×560 | `promo-marquee-1400x560.jpg` |
+
+Both are **24-bit JPEG (no alpha)** in `store/screenshots/`.
 
 ## Package for upload
 

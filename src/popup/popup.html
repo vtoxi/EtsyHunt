@@ -6,7 +6,7 @@
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
-  <div class="shell">
+  <div class="shell mode-idle" id="shell">
     <header class="topbar">
       <div class="brand">
         <div class="logo" aria-hidden="true">
@@ -28,7 +28,60 @@
     </header>
 
     <main class="content">
-      <section class="panel hero">
+      <!-- Result hero: report + resume (status-first) -->
+      <section class="panel result-hero" id="result-hero" hidden>
+        <div class="result-hero-head">
+          <div>
+            <div class="result-label">Latest research</div>
+            <div id="result-seed" class="result-seed">—</div>
+          </div>
+          <span id="result-verdict" class="report-verdict"></span>
+        </div>
+        <p id="result-meta" class="result-meta"></p>
+        <div class="result-actions">
+          <button id="btn-view-report" class="btn btn-dark" type="button">View report</button>
+          <button id="btn-download-report" class="btn btn-ghost" type="button">Download</button>
+        </div>
+        <div id="result-resume" class="result-resume" hidden>
+          <p id="result-resume-msg" class="result-resume-msg"></p>
+          <div class="result-resume-btns">
+            <button id="btn-resume" class="btn btn-sm btn-dark" type="button">Resume research</button>
+            <button id="btn-resume-dismiss" class="btn btn-sm btn-ghost" type="button">Dismiss</button>
+          </div>
+        </div>
+        <button id="btn-run-again" class="btn btn-ghost btn-run-again" type="button">Run again with same keyword</button>
+        <div id="report-history" class="report-history" style="display:none"></div>
+      </section>
+
+      <!-- Running: focused progress -->
+      <section class="panel run-focus" id="run-focus" hidden>
+        <div class="panel-title">Live research</div>
+        <div id="current-step" class="current-step" aria-live="polite">Processing…</div>
+        <div id="progress-info" class="progress-info"></div>
+        <div id="progress-track" class="track" style="display:none"><i id="progress-fill"></i></div>
+        <div id="progress-meta" class="track-meta" style="display:none">
+          <span id="progress-count"></span>
+          <span id="progress-left"></span>
+        </div>
+        <button id="btn-stop" class="btn btn-stop" type="button">Stop</button>
+
+        <div id="stop-sheet" class="stop-sheet" hidden>
+          <p class="stop-sheet-msg"><strong>Stop research?</strong> EtsyHunt will finish the current page, then save a partial report from whatever is complete.</p>
+          <div class="stop-sheet-btns">
+            <button id="btn-stop-report" class="btn btn-sm btn-dark" type="button">Stop &amp; save report</button>
+            <button id="btn-stop-discard" class="btn btn-sm btn-ghost" type="button">Stop without report</button>
+            <button id="btn-stop-cancel" class="btn btn-sm btn-ghost" type="button">Cancel</button>
+          </div>
+        </div>
+
+        <div class="mini-log-wrap">
+          <div id="mini-log" class="mini-log"></div>
+          <button id="btn-expand-log" class="btn btn-ghost btn-tiny btn-expand-log" type="button">Show full log</button>
+        </div>
+      </section>
+
+      <!-- Idle: primary seed form -->
+      <section class="panel hero" id="hero-panel">
         <label class="eyebrow" for="input-seed-keyword">What niche are you researching?</label>
         <input type="text" id="input-seed-keyword" class="seed-input"
                placeholder="tote bag, wedding invite, pet portrait…"
@@ -50,143 +103,153 @@
           <option value="any" selected>Any (no filter)</option>
         </select>
 
+        <div id="confirm-inline" class="confirm-inline" style="display:none">
+          <span id="confirm-msg" class="confirm-msg"></span>
+          <div class="confirm-btns">
+            <button id="btn-confirm-yes" class="btn btn-sm btn-dark" type="button">Yes, run again</button>
+            <button id="btn-confirm-no" class="btn btn-sm btn-ghost" type="button">Cancel</button>
+          </div>
+        </div>
+
         <button id="btn-full-pipeline" class="btn btn-cta">
           <span class="btn-cta-label">Run full research</span>
           <svg class="cta-arrow" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
             <path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
         </button>
+        <p class="pipeline-explainer">Discover keywords → capture snapshots → audit listings → score &amp; report</p>
         <div id="run-estimate" class="run-estimate"></div>
       </section>
 
-      <div id="confirm-banner" class="confirm-banner" style="display:none">
-        <span id="confirm-msg" class="confirm-msg"></span>
-        <div class="confirm-btns">
-          <button id="btn-confirm-yes" class="btn btn-sm btn-dark">Yes, run again</button>
-          <button id="btn-confirm-no" class="btn btn-sm btn-ghost">Cancel</button>
-        </div>
-      </div>
-
-      <section class="panel status-panel">
-        <div class="panel-title">Live run</div>
-        <div id="current-step" class="current-step">Ready — enter a keyword and press run</div>
-        <div id="progress-info" class="progress-info"></div>
-        <div id="progress-track" class="track" style="display:none"><i id="progress-fill"></i></div>
-        <div id="progress-meta" class="track-meta" style="display:none">
-          <span id="progress-count"></span>
-          <span id="progress-left"></span>
-        </div>
-        <button id="btn-stop" class="btn btn-stop" disabled>Stop</button>
-      </section>
-
-      <section class="steps-wrap">
-        <div class="panel-title">Or run one step</div>
-        <div class="step-buttons">
-          <button class="btn btn-step" data-step="1">
-            <span class="step-idx">01</span>
-            <em>Discover</em>
-            <span class="s-label">Keywords</span>
-          </button>
-          <button class="btn btn-step" data-step="2">
-            <span class="step-idx">02</span>
-            <em>Capture</em>
-            <span class="s-label">Snapshots</span>
-          </button>
-          <button class="btn btn-step" data-step="3">
-            <span class="step-idx">03</span>
-            <em>Audit</em>
-            <span class="s-label">Listings</span>
-          </button>
-          <button class="btn btn-step" data-step="4">
-            <span class="step-idx">04</span>
-            <em>Score</em>
-            <span class="s-label">Report</span>
-          </button>
-        </div>
-      </section>
-
-      <section class="panel log-panel">
-        <div class="log-head">
-          <div class="panel-title">Activity</div>
-          <div class="log-tools">
-            <button id="btn-copy-log" class="btn btn-ghost btn-tiny" title="Copy log">Copy</button>
-            <button id="btn-clear-log" class="btn btn-ghost btn-tiny" title="Clear log">Clear</button>
-            <button id="btn-download-logs" class="btn btn-ghost btn-tiny" title="Export last 10 runs">Export</button>
-          </div>
-        </div>
-        <div id="log-area" class="log-area">
-          <div class="log-empty">Waiting for a run…</div>
-        </div>
-      </section>
-
-      <details class="settings" id="settings-section">
+      <!-- Result mode: collapsed alternate niche -->
+      <details class="research-another" id="research-another">
         <summary>
-          <span>Advanced settings</span>
+          <span>Research another niche</span>
           <span class="chev">+</span>
         </summary>
-        <div class="settings-body">
-          <div class="grid-2">
-            <div class="f">
-              <label for="input-max-keywords">Keywords / run</label>
-              <input type="number" id="input-max-keywords" value="20" min="1" max="500"
-                     title="How many keywords to search and audit.">
-              <span class="hint">searched &amp; audited</span>
-            </div>
-            <div class="f">
-              <label for="input-delay">Page delay (s)</label>
-              <input type="number" id="input-delay" value="7" min="7"
-                     title="Wait between Etsy page loads. Minimum 7.">
-              <span class="hint">minimum 7</span>
+        <div class="research-another-body" id="research-another-body">
+          <p class="research-another-note">Change the seed keyword below and run a new research.</p>
+        </div>
+      </details>
+
+      <!-- Power-user sections -->
+      <details class="more-options" id="more-options">
+        <summary>
+          <span>More options</span>
+          <span class="chev">+</span>
+        </summary>
+        <div class="more-options-body">
+          <div class="steps-wrap">
+            <div class="panel-title">Run one step only</div>
+            <div class="step-buttons">
+              <button class="btn btn-step" data-step="1" type="button">
+                <span class="step-idx">01</span>
+                <em>Discover</em>
+                <span class="s-label">Keywords</span>
+              </button>
+              <button class="btn btn-step" data-step="2" type="button">
+                <span class="step-idx">02</span>
+                <em>Capture</em>
+                <span class="s-label">Snapshots</span>
+              </button>
+              <button class="btn btn-step" data-step="3" type="button">
+                <span class="step-idx">03</span>
+                <em>Audit</em>
+                <span class="s-label">Listings</span>
+              </button>
+              <button class="btn btn-step" data-step="4" type="button">
+                <span class="step-idx">04</span>
+                <em>Score</em>
+                <span class="s-label">Report</span>
+              </button>
             </div>
           </div>
 
-          <div class="divider">Qualification</div>
+          <section class="panel log-panel" id="log-panel">
+            <div class="log-head">
+              <div class="panel-title">Activity log</div>
+              <div class="log-tools">
+                <button id="btn-copy-log" class="btn btn-ghost btn-tiny" type="button" title="Copy log">Copy</button>
+                <button id="btn-clear-log" class="btn btn-ghost btn-tiny" type="button" title="Clear log">Clear</button>
+                <button id="btn-download-logs" class="btn btn-ghost btn-tiny" type="button" title="Export last 10 runs">Export</button>
+              </div>
+            </div>
+            <div id="log-area" class="log-area">
+              <div class="log-empty">Logs appear here once a run starts.</div>
+            </div>
+          </section>
 
-          <div class="grid-2">
-            <div class="f">
-              <label for="input-max-listings-per-kw">Listings / keyword</label>
-              <input type="number" id="input-max-listings-per-kw" value="12" min="6" max="48"
-                     title="Top listings opened as evidence.">
-              <span class="hint">audit depth</span>
-            </div>
-            <div class="f">
-              <label for="input-max-shop-reviews">Beatable reviews</label>
-              <input type="number" id="input-max-shop-reviews" value="300" min="50" max="5000"
-                     title="Shops under this review count are beatable.">
-              <span class="hint">under = beatable</span>
-            </div>
-            <div class="f">
-              <label for="input-min-beatable-slots">Min beatable slots</label>
-              <input type="number" id="input-min-beatable-slots" value="3" min="1" max="12"
-                     title="Minimum beatable slots per keyword.">
-              <span class="hint">per keyword</span>
-            </div>
-            <div class="f">
-              <label for="input-min-qualified-kw">Min keywords gate</label>
-              <input type="number" id="input-min-qualified-kw" value="5" min="1" max="50"
-                     title="Stop early if fewer keywords qualify.">
-              <span class="hint">before audit</span>
-            </div>
-          </div>
+          <details class="settings" id="settings-section">
+            <summary>
+              <span>Advanced settings</span>
+              <span class="chev">+</span>
+            </summary>
+            <div class="settings-body">
+              <p class="settings-intro">Recommended: 20 keywords, 12 listings per keyword, 7s page delay.</p>
+              <div class="grid-2">
+                <div class="f">
+                  <label for="input-max-keywords">How many keywords to research</label>
+                  <input type="number" id="input-max-keywords" value="20" min="1" max="500"
+                         title="Keywords searched and audited each run.">
+                  <span class="hint">searched &amp; audited per run</span>
+                </div>
+                <div class="f">
+                  <label for="input-delay">Wait between Etsy pages (seconds)</label>
+                  <input type="number" id="input-delay" value="7" min="7"
+                         title="Pause between page loads. Minimum 7 seconds.">
+                  <span class="hint">minimum 7 seconds</span>
+                </div>
+              </div>
 
-          <div id="warn-max-listings-per-kw" class="warn" style="display:none">
-            Above 16 listings per keyword slows the run. 12–16 is recommended.
-          </div>
+              <div class="divider">Qualification</div>
 
-          <div class="set-actions">
-            <button id="btn-save-settings" class="btn btn-dark">Save</button>
-            <button id="btn-reset-settings" class="btn btn-ghost"
-                    title="Restore defaults. Press Save to apply.">Reset</button>
-          </div>
-          <span id="settings-saved" class="saved-msg" style="display:none">Saved</span>
-          <span id="settings-reset" class="saved-msg" style="display:none">Defaults restored — Save to apply</span>
+              <div class="grid-2">
+                <div class="f">
+                  <label for="input-max-listings-per-kw">Listings to open per keyword</label>
+                  <input type="number" id="input-max-listings-per-kw" value="12" min="6" max="48"
+                         title="Top listings opened as evidence.">
+                  <span class="hint">audit depth</span>
+                </div>
+                <div class="f">
+                  <label for="input-max-shop-reviews">Max competitor reviews (beatable)</label>
+                  <input type="number" id="input-max-shop-reviews" value="300" min="50" max="5000"
+                         title="Shops under this review count count as beatable.">
+                  <span class="hint">under = beatable shop</span>
+                </div>
+                <div class="f">
+                  <label for="input-min-beatable-slots">Min beatable slots per keyword</label>
+                  <input type="number" id="input-min-beatable-slots" value="3" min="1" max="12"
+                         title="Minimum beatable page-one slots per keyword.">
+                  <span class="hint">page-one openings</span>
+                </div>
+                <div class="f">
+                  <label for="input-min-qualified-kw">Minimum keywords before continuing</label>
+                  <input type="number" id="input-min-qualified-kw" value="5" min="1" max="50"
+                         title="Stop early if fewer keywords qualify.">
+                  <span class="hint">before snapshot step</span>
+                </div>
+              </div>
+
+              <div id="warn-max-listings-per-kw" class="warn" style="display:none">
+                Above 16 listings per keyword slows the run. 12–16 is recommended.
+              </div>
+
+              <div class="set-actions">
+                <button id="btn-save-settings" class="btn btn-dark" type="button">Save settings</button>
+                <button id="btn-reset-settings" class="btn btn-ghost" type="button"
+                        title="Restore defaults. Press Save to apply.">Reset defaults</button>
+              </div>
+              <span id="settings-saved" class="saved-msg" style="display:none">Saved</span>
+              <span id="settings-reset" class="saved-msg" style="display:none">Defaults restored — Save to apply</span>
+            </div>
+          </details>
         </div>
       </details>
     </main>
 
     <footer class="ft">
       <span class="ft-left">Free &amp; open source · data stays on your device</span>
-      <span id="ext-version" class="ft-ver">v1.0.0</span>
+      <span id="ext-version" class="ft-ver">v1.1.0</span>
       <span id="last-run" class="ft-right"></span>
     </footer>
   </div>

@@ -31,7 +31,14 @@
 // niche_scores row so future formula changes never mix with these scores.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { EXT_NAME, extVersionLabel } from '../utils/brand.js';
+import { EXT_NAME, EXT_SITE, extVersionLabel } from '../utils/brand.js';
+import { deliverReport } from '../utils/report-delivery.js';
+import {
+  completedStepsFor,
+  partialBannerHtml,
+  partialDisplayVerdict,
+  partialScoreStatus,
+} from '../utils/partial-report.js';
 
 const FORMULA_VERSION = '1.3';
 const REPORT_VERSION = extVersionLabel();
@@ -89,6 +96,15 @@ function esc(s) {
 }
 
 export async function runNesScoring(sheetsClient, config, log, seedKeyword, opts = {}) {
+  if (opts && opts.insufficientKeywords) {
+    const { runInsufficientKeywordsReport } = await import('./niche-scoring-workflow.js');
+    return runInsufficientKeywordsReport(sheetsClient, config, log, seedKeyword, opts);
+  }
+  if (opts && opts.partialKeywordsOnly) {
+    const { runPartialKeywordReport } = await import('./niche-scoring-workflow.js');
+    return runPartialKeywordReport(sheetsClient, config, log, seedKeyword, opts);
+  }
+
   // 2026-08-20: server config table joins the lookup chain (popup > DB > code
   // default), matching Steps 2 and 3. Lets the scoring knobs (cold-days,
   // winner-card cap, freshness window) be retuned from the DB for all users
@@ -104,10 +120,12 @@ export async function runNesScoring(sheetsClient, config, log, seedKeyword, opts
     return dflt;
   };
   const pipelineRunId = (opts && (opts.pipelineRunId || opts.runId)) || null;
+  const isPartial = !!(opts && opts.partial);
+  const stoppedAfterStep = (opts && opts.stoppedAfterStep) || null;
   const nowMs = Date.now();
   const FRESH_HOURS = parseInt(cfg('data_staleness_hours', 48)) || 48;
 
-  log('info', `🧮 Scoring "${seedKeyword}" on live market evidence (formula v${FORMULA_VERSION})`);
+  log('info', `🧮 Scoring "${seedKeyword}" on live market evidence (formula v${FORMULA_VERSION})${isPartial ? ' [PARTIAL — user stopped early]' : ''}`);
 
   // ─── Load everything for this seed ───
   const { rows: seeds } = await sheetsClient.readSheet('seed_keywords');
@@ -707,7 +725,17 @@ export async function runNesScoring(sheetsClient, config, log, seedKeyword, opts
   scored.sort((a, b) => b.NES - a.NES);
 
   const enterable = scored.filter(s => !s.gates.length && (s.grade === 'A' || s.grade === 'B'));
-  const verdict = enterable.length > 0 ? 'GO' : 'NO-GO';
+  const underlyingVerdict = enterable.length > 0 ? 'GO' : 'NO-GO';
+  const hasAudits = audits.length > 0;
+  const verdict = isPartial
+    ? partialDisplayVerdict({
+        stoppedAfterStep,
+        underlyingVerdict,
+        gateSkip,
+        hasAudits,
+      })
+    : underlyingVerdict;
+  const scoreStatus = isPartial ? partialScoreStatus(underlyingVerdict) : underlyingVerdict;
   log('info', `⚖️ ${scored.length} keywords graded — ${scored.filter(s => s.grade === 'A').length} A, ${scored.filter(s => s.grade === 'B').length} B → verdict ${verdict}${thin.length ? (gateSkip
       ? ` (${thin.length} searched but not opened — the niche gate stopped the run, see the report)`
       : ` (${thin.length} more captured but not yet audited — raise Keywords Per Run or Top Listings Per Keyword, or re-run)`) : ''}`);
@@ -765,12 +793,12 @@ export async function runNesScoring(sheetsClient, config, log, seedKeyword, opts
       avg_searches: '0',
       weak_competitor_pct: scored.length ? (100 * scored.reduce((t, s) => t + s.m.beatShare, 0) / scored.length).toFixed(1) : '0',
       readiness_score: `${enterable.length}/${scored.length}`,
-      status: verdict,
+      status: scoreStatus,
       report_url: '',
       scored_at: new Date().toISOString(),
       formula_version: FORMULA_VERSION,
     }]);
-    log('info', `💾 niche_scores written (run_id=${pipelineRunId}, formula v${FORMULA_VERSION})`);
+    log('info', `💾 niche_scores written (run_id=${pipelineRunId}, formula v${FORMULA_VERSION}${isPartial ? ', PARTIAL' : ''})`);
   } catch (e) {
     log('warn', `⚠️ niche_scores write failed: ${e.message}`);
   }
@@ -906,19 +934,38 @@ export async function runNesScoring(sheetsClient, config, log, seedKeyword, opts
   // this run had 259 distinct listings. Scoring already de-duplicates; the
   // sentence the seller reads has to match it.
   const distinctListings = new Set(listings.map(l => String(l.listing_id))).size;
-  const html = buildReport({ seedKeyword, seed, scored, thin, enterable, winners, king, verdict, pipelineRunId, listings, distinctListings, coldDays, winnersMax, auditTarget, coldDigital, coldPhysical, beatThreshold, freshHours: FRESH_HOURS, soldMeasured, scopedToRun, gateSkip });
+  const html = buildReport({
+    seedKeyword, seed, scored, thin, enterable, winners, king, verdict, pipelineRunId, listings, distinctListings,
+    coldDays, winnersMax, auditTarget, coldDigital, coldPhysical, beatThreshold, freshHours: FRESH_HOURS,
+    soldMeasured, scopedToRun, gateSkip,
+    partial: isPartial,
+    stoppedAfterStep,
+    underlyingVerdict,
+    keywordCount: keywords.length,
+    listingCount: distinctListings,
+  });
   const dateStr = new Date().toISOString().slice(0, 10);
-  const filename = `etsyhunt_${seedKeyword.replace(/[^a-z0-9]+/gi, '_')}_${dateStr}.html`;
-  try {
-    const dataUrl = 'data:text/html;charset=utf-8,' + encodeURIComponent(html);
-    await chrome.downloads.download({ url: dataUrl, filename, saveAs: false });
-    log('success', `📄 Report downloaded: ${filename}`);
-  } catch (e) {
-    log('error', `❌ Report download failed: ${e.message}`);
-  }
+  const partialSuffix = isPartial ? '_partial' : '';
+  const filename = `etsyhunt_${seedKeyword.replace(/[^a-z0-9]+/gi, '_')}_${dateStr}${partialSuffix}.html`;
+  await deliverReport(html, {
+    filename,
+    seedKeyword,
+    verdict,
+    reportType: isPartial ? 'partial' : (gateSkip ? 'gate-skip' : 'full'),
+    partial: isPartial,
+    stoppedAfterStep,
+    completedSteps: isPartial ? completedStepsFor(stoppedAfterStep) : ['discovery', 'snapshots', 'audits', 'scoring'],
+  }, log);
 
   log('success', `🏁 Step 4 DONE! "${seedKeyword}" → ${verdict} (${enterable.length} enterable of ${scored.length} scored)`);
-  return { verdict, enterable: enterable.length, scoredCount: scored.length, formulaVersion: FORMULA_VERSION };
+  return {
+    verdict,
+    underlyingVerdict,
+    enterable: enterable.length,
+    scoredCount: scored.length,
+    formulaVersion: FORMULA_VERSION,
+    partial: isPartial,
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1158,9 +1205,13 @@ function buildReport(ctx) {
 
   const nA = scored.filter(s => s.grade === 'A').length;
   const nB = scored.filter(s => s.grade === 'B').length;
-  const headline = verdict === 'GO'
-    ? `Good news: this market has room. <span style="color:var(--go)">${nA} strong opening${nA === 1 ? '' : 's'}</span> and <span style="color:var(--test)">${nB} worth testing</span> — plus ${trapped.length} to avoid, each with the reason why.`
-    : `Honest verdict: we found no opening a new shop should enter right now — ${trapped.length} keyword(s) checked, every one gated. Better to know before you spend months here.`;
+  const uv = ctx.underlyingVerdict || (String(verdict).startsWith('PARTIAL') ? null : verdict);
+  const isGoSignal = uv === 'GO' || verdict === 'GO';
+  const headline = ctx.partial
+    ? `This is a <span style="color:var(--test)">partial</span> read of “${esc(seedKeyword)}” — ${nA} A-grade and ${nB} B-grade so far among ${scored.length} scored keyword(s). Treat it as a signal, not a final go / no-go.`
+    : (isGoSignal
+      ? `Good news: this market has room. <span style="color:var(--go)">${nA} strong opening${nA === 1 ? '' : 's'}</span> and <span style="color:var(--test)">${nB} worth testing</span> — plus ${trapped.length} to avoid, each with the reason why.`
+      : `Honest verdict: we found no opening a new shop should enter right now — ${trapped.length} keyword(s) checked, every one gated. Better to know before you spend months here.`);
 
   return `<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -1286,15 +1337,25 @@ footer .meta a:hover{text-decoration:underline}
 
 <header>
   <hr class="rule">
-  <div class="kicker"><span>${EXT_NAME} · Market Report</span><span>${new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}${ctx.pipelineRunId ? ' · Run #' + ctx.pipelineRunId : ''}</span></div>
-  <h1>You searched <em>“${esc(seedKeyword)}”</em>.<br>${verdict === 'GO' ? 'Here’s where a new shop can win.' : 'Here’s why we’d wait.'}</h1>
+  <div class="kicker"><span>${EXT_NAME} · Market Report${ctx.partial ? ' · Partial' : ''}</span><span>${new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}${ctx.pipelineRunId ? ' · Run #' + ctx.pipelineRunId : ''}</span></div>
+  ${ctx.partial ? partialBannerHtml({
+    stoppedAfterStep: ctx.stoppedAfterStep,
+    keywordCount: ctx.keywordCount != null ? ctx.keywordCount : scored.length,
+    listingCount: ctx.listingCount != null ? ctx.listingCount : (ctx.distinctListings ?? listings.length),
+    esc,
+  }) : ''}
+  <h1>You searched <em>“${esc(seedKeyword)}”</em>.<br>${ctx.partial
+    ? 'Here’s what we found before you stopped.'
+    : (verdict === 'GO' ? 'Here’s where a new shop can win.' : 'Here’s why we’d wait.')}</h1>
   <p class="subtitle">${ctx.gateSkip
     ? `We searched <b>${ctx.gateSkip.measuredCount} keyword${ctx.gateSkip.measuredCount === 1 ? '' : 's'}</b> and read <b>${ctx.distinctListings ?? listings.length} top listings</b> on Etsy, then stopped: only <b>${ctx.gateSkip.qualifiedCount}</b> of them had enough page-one room for a new shop, so we did not spend the time opening listings for a niche this crowded.`
     : `We checked <b>${scored.length} keyword ideas</b>, read <b>${ctx.distinctListings ?? listings.length} top listings</b> live on Etsy, and looked at who’s selling, who owns the shelf, and what’s gone quiet.`}</p>
   ${ctx.scopedToRun === false ? `<p class="subtitle" style="color:#8a5a00;background:#fff6e0;border:1px solid #f0d9a0;border-radius:8px;padding:10px 12px"><b>Heads up:</b> this report was built from data already stored for “${esc(seedKeyword)}” (last ${ctx.freshHours || 48} hours), not from a fresh crawl — Steps 1–3 were not run just now. Numbers may mix more than one visit to Etsy.</p>` : ''}
-  <div class="verdict-line"><span class="sun">${verdict === 'GO' ? '☀️' : '🌧'}</span><div><div class="big">${ctx.gateSkip && verdict !== 'GO'
+  <div class="verdict-line"><span class="sun">${ctx.partial ? '⏸' : (isGoSignal ? '☀️' : '🌧')}</span><div><div class="big">${ctx.partial
+    ? esc(verdict)
+    : (ctx.gateSkip && !isGoSignal
     ? `This niche is too crowded to enter. Only <span style="color:var(--skip)">${ctx.gateSkip.qualifiedCount} of ${ctx.gateSkip.measuredCount}</span> keywords had page-one room for a new shop — we stopped before opening listings, because the answer was already clear.`
-    : headline}</div></div></div>
+    : headline)}</div></div></div>
 </header>
 
 ${seedVerdictHtml}
@@ -1362,7 +1423,7 @@ ${thin && thin.length && !ctx.gateSkip ? `<section><h2>🕓 Not enough data yet<
     <span class="t1">This report was made with ${EXT_NAME}.</span>
     <span class="t2">Every number read live off Etsy — no search-volume guesswork.</span>
   </span>
-  <a class="cta" href="${NM_SITE}" target="_blank" rel="noopener">Get your own &rarr;</a>
+  <a class="cta" href="${EXT_SITE}" target="_blank" rel="noopener">Get your own &rarr;</a>
   <span class="meta"><span>${esc(REPORT_VERSION)} · formula v${FORMULA_VERSION} · ${ctx.distinctListings ?? listings.length} listings read live · data stored locally in your browser</span></span>
 </footer>
 </div></body></html>`;

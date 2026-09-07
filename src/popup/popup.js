@@ -19,7 +19,56 @@ function showVersion() {
 }
 
 const STEP_LABELS = ['Keywords', 'Snapshots', 'Listings', 'Report'];
-const CTA_DEFAULT = 'Start full pipeline';
+const CTA_DEFAULT = 'Run full research';
+
+function resolvePopupMode(state, lastReport, checkpoint) {
+  const running = !!(state && (state.running || state.stopping));
+  if (running) return 'running';
+
+  const hasReport = !!(lastReport && lastReport.html);
+  const hasResultStatus = state && (state.lastStatus === 'success' || state.lastStatus === 'stopped_partial');
+  const hasCheckpoint = !!(checkpoint && checkpoint.seedKeyword);
+
+  if (hasReport || hasResultStatus || hasCheckpoint) return 'result';
+  return 'idle';
+}
+
+function applyPopupMode(mode) {
+  const shell = document.getElementById('shell');
+  if (!shell) return;
+  shell.classList.remove('mode-idle', 'mode-running', 'mode-result');
+  shell.classList.add('mode-' + mode);
+
+  const hero = document.getElementById('hero-panel');
+  const content = document.querySelector('.content');
+  const anotherBody = document.getElementById('research-another-body');
+  const runFocus = document.getElementById('run-focus');
+  if (runFocus) runFocus.hidden = mode !== 'running';
+
+  if (!hero || !content || !anotherBody) return;
+
+  if (mode === 'result') {
+    if (hero.parentElement !== anotherBody) anotherBody.appendChild(hero);
+    hero.classList.add('hero-compact');
+  } else {
+    if (hero.parentElement !== content) {
+      const anchor = document.getElementById('research-another');
+      content.insertBefore(hero, anchor || null);
+    }
+    hero.classList.remove('hero-compact');
+  }
+}
+
+function showStopSheet(show) {
+  const sheet = document.getElementById('stop-sheet');
+  if (!sheet) return;
+  if (show) {
+    sheet.hidden = false;
+    document.getElementById('btn-stop-report')?.focus();
+  } else {
+    sheet.hidden = true;
+  }
+}
 
 function setCtaLabel(text) {
   const btn = document.getElementById('btn-full-pipeline');
@@ -49,8 +98,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // ─── Load state ───
   async function refreshUI() {
-    const { runState } = await chrome.storage.local.get('runState');
-    const state = runState || { running: false, currentStep: null, progress: '', logs: [] };
+    const data = await chrome.storage.local.get(['runState', 'lastReport', 'pipelineCheckpoint']);
+    const state = data.runState || { running: false, currentStep: null, progress: '', logs: [] };
+    const lastReport = data.lastReport || null;
+    const checkpoint = data.pipelineCheckpoint || null;
 
     // Clear pendingStart once the worker has actually started, or if it's been
     // way too long (something went wrong — let the user click again).
@@ -69,39 +120,45 @@ document.addEventListener('DOMContentLoaded', async () => {
       state.currentStep = state.currentStep || 'Starting...';
     }
 
+    const mode = resolvePopupMode(state, lastReport, checkpoint);
+    applyPopupMode(mode);
+
     const dot = $('status-dot');
     const statusText = $('status-text');
     const statusPill = $('status-pill');
     const stepEl = $('current-step');
     const progressEl = $('progress-info');
 
-    // 2026-08-20: progress bar. The service worker publishes progressCur/Total
-    // from the [i/n] counters the workflows already emit, so this needs no new
-    // plumbing in the step modules. Time-left uses the per-item costs measured
-    // from real runs (~42s to search a keyword, ~17s to open a listing at a 7s
-    // delay). Everything hides when there is no count — a bar that invents its
-    // own position is worse than no bar.
     renderProgress(state);
 
-    if (state.running) {
+    if (state.running || state.stopping) {
+      const stopping = !!state.stopping || state.lastStatus === 'stopping';
       dot.className = 'dot running';
-      statusText.textContent = 'Running';
+      statusText.textContent = stopping ? 'Stopping' : 'Running';
       statusPill?.classList.remove('is-success', 'is-error');
       statusPill?.classList.add('is-running');
-      stepEl.textContent = state.currentStep || 'Processing…';
+      stepEl.textContent = state.currentStep || (stopping ? 'Stopping…' : 'Processing…');
       progressEl.textContent = state.progress || '';
       $('btn-full-pipeline').disabled = true;
-      setCtaLabel('Running…');
+      setCtaLabel(stopping ? 'Stopping…' : 'Running…');
       document.querySelectorAll('.btn-step').forEach(b => b.disabled = true);
-      $('btn-stop').disabled = false;
+      $('btn-stop').disabled = stopping;
+      if (stopping) showStopSheet(false);
     } else {
+      showStopSheet(false);
       const isError = state.lastStatus === 'error';
       const isSuccess = state.lastStatus === 'success';
-      dot.className = 'dot ' + (isError ? 'error' : isSuccess ? 'success' : 'idle');
-      statusText.textContent = isError ? 'Error' : isSuccess ? 'Completed' : state.lastStatus === 'stopped' ? 'Stopped' : 'Idle';
+      const isPartial = state.lastStatus === 'stopped_partial';
+      const isStopped = state.lastStatus === 'stopped' || isPartial;
+      dot.className = 'dot ' + (isError ? 'error' : (isSuccess || isPartial) ? 'success' : 'idle');
+      statusText.textContent = isError ? 'Error'
+        : isSuccess ? 'Completed'
+        : isPartial ? 'Partial'
+        : isStopped ? 'Stopped'
+        : 'Idle';
       statusPill?.classList.remove('is-running', 'is-success', 'is-error');
       if (isError) statusPill?.classList.add('is-error');
-      else if (isSuccess) statusPill?.classList.add('is-success');
+      else if (isSuccess || isPartial) statusPill?.classList.add('is-success');
       stepEl.textContent = state.lastStatus
         ? `Last run: ${state.currentStep || 'Pipeline'}`
         : 'Ready when you are';
@@ -114,22 +171,179 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (lbl) lbl.textContent = STEP_LABELS[i];
       });
       $('btn-stop').disabled = true;
+
+      if (isError) {
+        const more = $('more-options');
+        const logSection = $('log-panel');
+        if (more && !more.open) more.open = true;
+        if (logSection) logSection.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      }
     }
 
+    renderLogs(state.logs || []);
+    renderMiniLog(state.logs || []);
+    await refreshResultHero(state, lastReport);
+    await refreshResumeStrip(state, checkpoint);
+  }
+
+  function renderLogEntry(l) {
+    const cls = l.type === 'error' ? 'log-error' : l.type === 'success' ? 'log-success' : l.type === 'warn' ? 'log-warn' : 'log-info';
+    const time = l.time ? `<span style="color:#64748b">[${escHtml(l.time)}]</span> ` : '';
+    return `<div class="log-entry ${cls}">${time}${escHtml(l.msg)}</div>`;
+  }
+
+  function renderLogs(logs) {
     const logArea = $('log-area');
-    if (state.logs && state.logs.length > 0) {
-      logArea.innerHTML = state.logs.map(l => {
-        const cls = l.type === 'error' ? 'log-error' : l.type === 'success' ? 'log-success' : l.type === 'warn' ? 'log-warn' : 'log-info';
-        const time = l.time ? `<span style="color:#64748b">[${escHtml(l.time)}]</span> ` : '';
-        return `<div class="log-entry ${cls}">${time}${escHtml(l.msg)}</div>`;
-      }).join('');
+    if (!logArea) return;
+    if (logs.length > 0) {
+      logArea.innerHTML = logs.map(renderLogEntry).join('');
       logArea.scrollTop = logArea.scrollHeight;
-    } else if (logArea) {
+    } else {
       logArea.innerHTML = '<div class="log-empty">Logs appear here once a run starts.</div>';
     }
   }
 
-  // ─── Progress bar ─────────────────────────────────────────────────────────
+  function renderMiniLog(logs) {
+    const mini = $('mini-log');
+    if (!mini) return;
+    if (!logs.length) {
+      mini.innerHTML = '<div class="log-entry log-info">Waiting for activity…</div>';
+      return;
+    }
+    const tail = logs.slice(-3);
+    mini.innerHTML = tail.map(renderLogEntry).join('');
+  }
+
+  async function refreshResultHero(state, lastReport) {
+    const hero = $('result-hero');
+    const seedEl = $('result-seed');
+    const metaEl = $('result-meta');
+    const verdictEl = $('result-verdict');
+    if (!hero || !seedEl || !metaEl || !verdictEl) return;
+
+    const shell = $('shell');
+    const inResultMode = shell?.classList.contains('mode-result');
+    if (!inResultMode) {
+      hero.hidden = true;
+      return;
+    }
+
+    const report = lastReport || (await chrome.storage.local.get('lastReport')).lastReport;
+    const meta = (state && state.lastReport) || null;
+
+    if (!report || !report.html) {
+      if (inResultMode) {
+        const cpSeed = state?.seedKeyword || (await chrome.storage.local.get('pipelineCheckpoint')).pipelineCheckpoint?.seedKeyword;
+        seedEl.textContent = cpSeed || 'Research paused';
+        metaEl.textContent = 'No report saved yet — resume to continue or run again.';
+        verdictEl.textContent = '';
+        verdictEl.className = 'report-verdict';
+        hero.hidden = false;
+        const viewBtn = $('btn-view-report');
+        const dlBtn = $('btn-download-report');
+        if (viewBtn) viewBtn.disabled = true;
+        if (dlBtn) dlBtn.disabled = true;
+      } else {
+        hero.hidden = true;
+      }
+      return;
+    }
+
+    const viewBtn = $('btn-view-report');
+    const dlBtn = $('btn-download-report');
+    if (viewBtn) viewBtn.disabled = false;
+    if (dlBtn) dlBtn.disabled = false;
+
+    const seed = report.seedKeyword || meta?.seedKeyword || 'Research report';
+    const verdict = (report.verdict || meta?.verdict || '').toUpperCase();
+    const isPartial = !!(report.partial || meta?.partial || String(verdict).includes('PARTIAL'));
+    const verdictCls = isPartial ? 'partial' : verdict === 'GO' ? 'go' : verdict === 'NO-GO' ? 'nogo' : '';
+    const when = report.generatedAt || meta?.generatedAt;
+    const whenStr = when ? new Date(when).toLocaleString() : '';
+    const file = report.filename || meta?.filename || 'report.html';
+    const stepNote = isPartial && (report.stoppedAfterStep || meta?.stoppedAfterStep)
+      ? ` · stopped after Step ${report.stoppedAfterStep || meta.stoppedAfterStep}`
+      : '';
+
+    seedEl.textContent = seed;
+    metaEl.textContent = `${file}${whenStr ? ` · ${whenStr}` : ''}${stepNote}`;
+    verdictEl.textContent = verdict || '';
+    verdictEl.className = 'report-verdict ' + verdictCls;
+    hero.hidden = false;
+
+    const runAgain = $('btn-run-again');
+    if (runAgain) {
+      runAgain.onclick = () => {
+        if (seed && seed !== 'Research report') {
+          $('input-seed-keyword').value = seed;
+          chrome.storage.local.set({ currentSeedKeyword: seed });
+        }
+        $('btn-full-pipeline')?.click();
+      };
+    }
+
+    refreshReportHistory();
+  }
+
+  async function refreshResumeStrip(state, checkpoint) {
+    const strip = $('result-resume');
+    const msg = $('result-resume-msg');
+    if (!strip || !msg) return;
+
+    let cp = checkpoint;
+    if (!cp) {
+      try {
+        const resp = await chrome.runtime.sendMessage({ action: 'getCheckpoint' });
+        cp = resp && resp.checkpoint;
+      } catch (_) {}
+    }
+
+    if (!cp || !cp.seedKeyword) {
+      strip.hidden = true;
+      return;
+    }
+    if (state && (state.running || state.stopping)) {
+      strip.hidden = true;
+      return;
+    }
+
+    msg.textContent = `Resume available for “${cp.seedKeyword}” — continue from Step ${(cp.lastCompletedStep || 0) + 1}.`;
+    strip.hidden = false;
+  }
+
+  async function refreshReportHistory() {
+    const el = $('report-history');
+    if (!el) return;
+    try {
+      const resp = await chrome.runtime.sendMessage({ action: 'getReportHistory' });
+      const history = (resp && resp.history) || [];
+      if (history.length <= 1) {
+        el.style.display = 'none';
+        el.innerHTML = '';
+        return;
+      }
+      const items = history.slice(0, 5).map((h) => {
+        const label = escHtml(h.seedKeyword || 'Report');
+        const when = h.generatedAt ? new Date(h.generatedAt).toLocaleDateString() : '';
+        const badge = h.partial ? ' · partial' : '';
+        const disabled = h.hasHtml ? '' : ' disabled title="HTML pruned to save space"';
+        return `<div class="report-history-item">
+          <span>${label}${badge}${when ? ` · ${escHtml(when)}` : ''}</span>
+          <button type="button" data-report-id="${escHtml(h.id || '')}"${disabled}>Open</button>
+        </div>`;
+      }).join('');
+      el.innerHTML = `<div class="report-history-title">Recent reports</div>${items}`;
+      el.style.display = 'block';
+      el.querySelectorAll('button[data-report-id]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          chrome.runtime.sendMessage({ action: 'openReportFromHistory', id: btn.getAttribute('data-report-id') });
+        });
+      });
+    } catch (_) {
+      el.style.display = 'none';
+    }
+  }
+
   function renderProgress(state) {
     const track = $('progress-track');
     const meta  = $('progress-meta');
@@ -312,11 +526,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-  // Show inline confirmation banner, returns promise
+  // Show inline confirmation row, returns promise
   function showConfirmBanner(message) {
     return new Promise((resolve) => {
-      const banner = $('confirm-banner');
+      const banner = $('confirm-inline');
       const msg = $('confirm-msg');
+      if (!banner || !msg) { resolve(true); return; }
       msg.textContent = message;
       banner.style.display = 'block';
 
@@ -325,14 +540,14 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       function cleanup() {
         banner.style.display = 'none';
-        yesBtn.removeEventListener('click', onYes);
-        noBtn.removeEventListener('click', onNo);
+        yesBtn?.removeEventListener('click', onYes);
+        noBtn?.removeEventListener('click', onNo);
       }
       function onYes() { cleanup(); resolve(true); }
       function onNo() { cleanup(); resolve(false); }
 
-      yesBtn.addEventListener('click', onYes);
-      noBtn.addEventListener('click', onNo);
+      yesBtn?.addEventListener('click', onYes);
+      noBtn?.addEventListener('click', onNo);
     });
   }
 
@@ -478,9 +693,48 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   $('btn-stop').addEventListener('click', () => {
-    if (!confirm('Stop the running pipeline? Progress will be lost.')) return;
-    chrome.runtime.sendMessage({ action: 'stopPipeline' });
+    showStopSheet(true);
+  });
+
+  $('btn-stop-cancel')?.addEventListener('click', () => {
+    showStopSheet(false);
+  });
+
+  $('btn-stop-report')?.addEventListener('click', () => {
+    showStopSheet(false);
+    chrome.runtime.sendMessage({ action: 'stopPipeline', mode: 'report' });
     setTimeout(refreshUI, 500);
+  });
+
+  $('btn-stop-discard')?.addEventListener('click', () => {
+    showStopSheet(false);
+    chrome.runtime.sendMessage({ action: 'stopPipeline', mode: 'discard' });
+    setTimeout(refreshUI, 500);
+  });
+
+  $('btn-expand-log')?.addEventListener('click', () => {
+    const more = $('more-options');
+    if (more) more.open = true;
+    $('log-panel')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  });
+
+  $('btn-resume')?.addEventListener('click', () => {
+    chrome.runtime.sendMessage({ action: 'resumePipeline' }, (resp) => {
+      if (resp && resp.started && resp.seedKeyword) {
+        const seed = $('input-seed-keyword');
+        if (seed) seed.value = resp.seedKeyword;
+      }
+      const strip = $('result-resume');
+      if (strip) strip.hidden = true;
+      setTimeout(refreshUI, 500);
+    });
+  });
+
+  $('btn-resume-dismiss')?.addEventListener('click', () => {
+    chrome.runtime.sendMessage({ action: 'clearCheckpoint' });
+    const strip = $('result-resume');
+    if (strip) strip.hidden = true;
+    refreshUI();
   });
 
   $('btn-copy-log').addEventListener('click', async () => {
@@ -522,6 +776,49 @@ document.addEventListener('DOMContentLoaded', async () => {
     state.logs = [];
     await chrome.storage.local.set({ runState: state });
     refreshUI();
+  });
+
+  $('btn-view-report')?.addEventListener('click', () => {
+    chrome.runtime.sendMessage({ action: 'openReport' });
+  });
+
+  $('btn-download-report')?.addEventListener('click', async () => {
+    const btn = $('btn-download-report');
+    const label = btn?.textContent || 'Download HTML';
+    try {
+      const resp = await chrome.runtime.sendMessage({ action: 'downloadReport' });
+      if (!resp?.ok) throw new Error(resp?.error || 'Download failed');
+      if (btn) {
+        btn.textContent = 'Downloaded!';
+        setTimeout(() => { btn.textContent = label; }, 1500);
+      }
+    } catch (e) {
+      console.error('Report download failed:', e);
+      // Fallback: download directly from popup storage
+      try {
+        const { lastReport } = await chrome.storage.local.get('lastReport');
+        if (lastReport?.html) {
+          const blob = new Blob([lastReport.html], { type: 'text/html;charset=utf-8' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = lastReport.filename || 'etsyhunt_report.html';
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+          if (btn) {
+            btn.textContent = 'Downloaded!';
+            setTimeout(() => { btn.textContent = label; }, 1500);
+          }
+          return;
+        }
+      } catch (_) {}
+      if (btn) {
+        btn.textContent = 'No report';
+        setTimeout(() => { btn.textContent = label; }, 1500);
+      }
+    }
   });
 
   // Download persistent run history (last 10 runs) as a JSON file.
@@ -622,9 +919,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Listen for state changes
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && changes.runState) {
-      refreshUI();
-    }
+    if (area !== 'local') return;
+    if (changes.runState || changes.lastReport || changes.pipelineCheckpoint) refreshUI();
+    if (changes.lastReport || changes.reportHistory) refreshReportHistory();
   });
 
   // Last run time

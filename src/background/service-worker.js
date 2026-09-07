@@ -13,6 +13,10 @@ import { runNicheScoring } from '../worker-modules/niche-scoring-workflow.js';
 // Legacy modules stay importable as the fallback (`use_nes_pipeline=false`).
 import { runNesDiscovery } from '../worker-modules/nes-discovery-workflow.js';
 import { runNesScoring } from '../worker-modules/nes-scoring-workflow.js';
+import {
+  assessPartialEligibility,
+  countSeedEvidence,
+} from '../utils/partial-report.js';
 
 // Config flag helper: NES is the default in 2.0.0; explicit false/0/'false'
 // (from DB config or popup) reverts to the legacy eRank pipeline.
@@ -35,8 +39,11 @@ function nesEnabled(config) {
 }
 
 let stopRequested = false;
+let stopMode = 'report'; // 'report' | 'discard'
 let pipelineRunning = false;
 let workTabId = null;
+// Active pipeline context — used by Stop → partial report + Phase 3 resume.
+let activePipelineCtx = null;
 // Handle to the in-flight server-side run row (pro_etsy_res_user_runs). Set the
 // moment createRun returns; cleared when the run is archived. A Stop click uses
 // it to close the row IMMEDIATELY, instead of waiting for the async pipeline
@@ -136,6 +143,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         }
         pipelineRunning = true;
         stopRequested = false;
+        stopMode = 'report';
         // Mark running in persistent storage IMMEDIATELY (before any async
         // work) so a second click that wakes a fresh SW sees the lock.
         await updateState({ running: true, currentStep: 'Starting...', progress: '', lastStatus: null, lastStartedAt: new Date().toISOString(), progressCur: null, progressTotal: null, progressPhase: null });
@@ -157,8 +165,24 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   if (msg.action === 'stopPipeline') {
     stopRequested = true;
-    log('warn', '🛑 Stop requested by user — finishing current operation...');
-    updateState({ running: false, progressCur: null, progressTotal: null, progressPhase: null, lastStatus: 'stopped', progress: 'Stopped by user' });
+    stopMode = (msg.mode === 'discard') ? 'discard' : 'report';
+    const modeNote = stopMode === 'discard'
+      ? 'finishing current operation (no report)…'
+      : 'finishing current operation, then saving a partial report…';
+    log('warn', `🛑 Stop requested by user — ${modeNote}`);
+    // Keep running=true until the pipeline handler finishes the current step
+    // and (optionally) generates the partial report. The popup uses
+    // lastStatus/stopping to show "Stopping…".
+    updateState({
+      stopping: true,
+      progressCur: null,
+      progressTotal: null,
+      progressPhase: null,
+      lastStatus: 'stopping',
+      progress: stopMode === 'discard'
+        ? 'Stopping — no report'
+        : 'Stopping — will save a partial report',
+    });
     // Close the in-flight server run row NOW so its concurrent slot frees
     // immediately. Relying on the async loop to reach a checkStop is unsafe:
     // an MV3 teardown can abandon the loop, orphaning the row as 'running'
@@ -178,7 +202,98 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (chrome.runtime.lastError) { workTabId = null; }
       });
     }
-    sendResponse({ stopped: true });
+    sendResponse({ stopped: true, mode: stopMode });
+  }
+
+  if (msg.action === 'resumePipeline') {
+    (async () => {
+      try {
+        const data = await chrome.storage.local.get('pipelineCheckpoint');
+        const cp = data.pipelineCheckpoint;
+        if (!cp || !cp.seedKeyword) {
+          sendResponse({ started: false, reason: 'No checkpoint to resume' });
+          return;
+        }
+        const persisted = await loadRunState();
+        if (pipelineRunning || (persisted && persisted.running)) {
+          sendResponse({ started: false, reason: 'Pipeline already running' });
+          return;
+        }
+        pipelineRunning = true;
+        stopRequested = false;
+        stopMode = 'report';
+        await updateState({
+          running: true,
+          stopping: false,
+          currentStep: `Resuming "${cp.seedKeyword}" from Step ${(cp.lastCompletedStep || 0) + 1}…`,
+          progress: '',
+          lastStatus: null,
+          lastStartedAt: new Date().toISOString(),
+          progressCur: null,
+          progressTotal: null,
+          progressPhase: null,
+        });
+        sendResponse({ started: true, seedKeyword: cp.seedKeyword, fromStep: (cp.lastCompletedStep || 0) + 1 });
+        runFullPipeline(cp.seedKeyword, { resumeFrom: cp })
+          .finally(() => { pipelineRunning = false; });
+      } catch (e) {
+        pipelineRunning = false;
+        sendResponse({ started: false, reason: e.message });
+      }
+    })();
+    return true;
+  }
+
+  if (msg.action === 'getCheckpoint') {
+    chrome.storage.local.get('pipelineCheckpoint').then((data) => {
+      sendResponse({ checkpoint: data.pipelineCheckpoint || null });
+    });
+    return true;
+  }
+
+  if (msg.action === 'clearCheckpoint') {
+    chrome.storage.local.remove('pipelineCheckpoint').then(() => sendResponse({ ok: true }));
+    return true;
+  }
+
+  if (msg.action === 'getReportHistory') {
+    chrome.storage.local.get('reportHistory').then((data) => {
+      const history = Array.isArray(data.reportHistory) ? data.reportHistory : [];
+      sendResponse({
+        history: history.map((h) => ({
+          id: h.id,
+          seedKeyword: h.seedKeyword,
+          verdict: h.verdict,
+          generatedAt: h.generatedAt,
+          filename: h.filename,
+          reportType: h.reportType,
+          partial: h.partial,
+          stoppedAfterStep: h.stoppedAfterStep,
+          hasHtml: !!(h.htmlStored && h.html),
+        })),
+      });
+    });
+    return true;
+  }
+
+  if (msg.action === 'openReportFromHistory') {
+    (async () => {
+      try {
+        const { reportHistory } = await chrome.storage.local.get('reportHistory');
+        const history = Array.isArray(reportHistory) ? reportHistory : [];
+        const entry = history.find((h) => h.id === msg.id);
+        if (!entry || !entry.html) {
+          sendResponse({ ok: false, error: 'Report not found in history (HTML may have been pruned)' });
+          return;
+        }
+        await chrome.storage.local.set({ lastReport: entry });
+        chrome.tabs.create({ url: chrome.runtime.getURL('src/report/viewer.html') });
+        sendResponse({ ok: true });
+      } catch (e) {
+        sendResponse({ ok: false, error: e.message });
+      }
+    })();
+    return true;
   }
 
   if (msg.action === 'checkSeedExists') {
@@ -215,6 +330,62 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.action === 'getRunHistory') {
     chrome.storage.local.get('runHistory').then(data => {
       sendResponse({ history: data.runHistory || [] });
+    });
+    return true;
+  }
+
+  if (msg.action === 'openReport') {
+    chrome.tabs.create({ url: chrome.runtime.getURL('src/report/viewer.html') });
+    sendResponse({ ok: true });
+    return false;
+  }
+
+  if (msg.action === 'downloadReport') {
+    (async () => {
+      try {
+        const { lastReport } = await chrome.storage.local.get('lastReport');
+        if (!lastReport || !lastReport.html) {
+          sendResponse({ ok: false, error: 'No report saved yet' });
+          return;
+        }
+        const blob = new Blob([lastReport.html], { type: 'text/html;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        try {
+          await chrome.downloads.download({
+            url,
+            filename: lastReport.filename || 'etsyhunt_report.html',
+            saveAs: false,
+          });
+          sendResponse({ ok: true });
+        } finally {
+          setTimeout(() => {
+            try { URL.revokeObjectURL(url); } catch (_) {}
+          }, 60000);
+        }
+      } catch (e) {
+        sendResponse({ ok: false, error: e.message });
+      }
+    })();
+    return true;
+  }
+
+  if (msg.action === 'getLastReport') {
+    chrome.storage.local.get('lastReport').then(data => {
+      const r = data.lastReport;
+      if (!r) {
+        sendResponse({ report: null });
+        return;
+      }
+      sendResponse({
+        report: {
+          seedKeyword: r.seedKeyword,
+          verdict: r.verdict,
+          generatedAt: r.generatedAt,
+          filename: r.filename,
+          reportType: r.reportType,
+          hasHtml: !!r.html,
+        },
+      });
     });
     return true;
   }
@@ -430,10 +601,158 @@ async function initAPIClient() {
   return new LocalStorageAPIClient();
 }
 
+async function savePipelineCheckpoint(checkpoint) {
+  try {
+    await chrome.storage.local.set({ pipelineCheckpoint: checkpoint });
+  } catch (e) {
+    console.warn('[ENR] checkpoint save failed:', e && e.message);
+  }
+}
+
+async function clearPipelineCheckpoint() {
+  try {
+    await chrome.storage.local.remove('pipelineCheckpoint');
+  } catch (_) {}
+}
+
+/**
+ * Generate a partial report after the user stops, if enough data exists.
+ */
+async function generatePartialReportIfEligible({
+  apiClient, config, seedKeyword, pipelineRunId, pipelineStartedAt,
+  stoppedAfterStep, useNes,
+}) {
+  if (stopMode === 'discard') {
+    await log('info', 'Stop mode is discard — skipping partial report');
+    return { generated: false, reason: 'discard' };
+  }
+
+  const counts = await countSeedEvidence(apiClient, seedKeyword);
+  const assessment = assessPartialEligibility(stoppedAfterStep, counts);
+  if (!assessment.eligible) {
+    await log('warn', `Not enough data for a partial report yet (keywords=${counts.keywordCount}, listings=${counts.listingCount}, audits=${counts.auditCount})`);
+    return { generated: false, reason: assessment.reason || 'insufficient_data', counts };
+  }
+
+  await log('info', `📄 Generating partial report (path=${assessment.path}, stopped after Step ${stoppedAfterStep})…`);
+  await updateState({
+    currentStep: `Partial report for "${seedKeyword}"`,
+    progress: `Building report from Steps 1–${stoppedAfterStep}…`,
+    stopping: true,
+  });
+
+  const logFn = (type, msg) => {
+    log(type, `[Partial] ${msg}`);
+    updateState({ progress: msg });
+  };
+
+  const baseOpts = {
+    partial: true,
+    userStopped: true,
+    stoppedAfterStep,
+    pipelineRunId,
+    pipelineStartedAt,
+  };
+
+  try {
+    const runner = useNes ? runNesScoring : runNicheScoring;
+    const result = await runner(apiClient, config, logFn, seedKeyword, {
+      ...baseOpts,
+      ...(assessment.path === 'keywords' ? { partialKeywordsOnly: true } : {}),
+    });
+    await log('success', `Partial report ready: ${result && result.verdict ? result.verdict : 'saved'}`);
+    return { generated: true, result, counts };
+  } catch (e) {
+    await log('error', `Partial report failed: ${e.message}`);
+    return { generated: false, reason: e.message, counts };
+  }
+}
+
+async function handlePipelineStop({
+  apiClient, config, seedKeyword, pipelineRunId, pipelineStartedAt,
+  stoppedAfterStep, useNes, _archive,
+}) {
+  await savePipelineCheckpoint({
+    seedKeyword,
+    lastCompletedStep: stoppedAfterStep,
+    pipelineRunId,
+    pipelineStartedAt,
+    stoppedAt: new Date().toISOString(),
+    useNes: !!useNes,
+  });
+
+  const outcome = await generatePartialReportIfEligible({
+    apiClient, config, seedKeyword, pipelineRunId, pipelineStartedAt,
+    stoppedAfterStep, useNes,
+  });
+
+  if (outcome.generated) {
+    await updateState({
+      running: false,
+      stopping: false,
+      progressCur: null,
+      progressTotal: null,
+      progressPhase: null,
+      lastStatus: 'stopped_partial',
+      stoppedAfterStep,
+      partialReportReady: true,
+      currentStep: `Stopped after Step ${stoppedAfterStep} — partial report ready`,
+      progress: `Partial report ready — stopped after Step ${stoppedAfterStep}`,
+    });
+    await chrome.storage.local.set({ lastRunTime: Date.now() });
+    await log('warn', `=== Pipeline stopped after Step ${stoppedAfterStep} — partial report saved ===`);
+    await _archive('stopped_partial');
+  } else if (outcome.reason === 'discard') {
+    await updateState({
+      running: false,
+      stopping: false,
+      progressCur: null,
+      progressTotal: null,
+      progressPhase: null,
+      lastStatus: 'stopped',
+      stoppedAfterStep,
+      partialReportReady: false,
+      currentStep: `Stopped after Step ${stoppedAfterStep}`,
+      progress: 'Stopped by user',
+    });
+    await log('warn', `=== Pipeline stopped after Step ${stoppedAfterStep} (no report) ===`);
+    await _archive('stopped');
+  } else {
+    await updateState({
+      running: false,
+      stopping: false,
+      progressCur: null,
+      progressTotal: null,
+      progressPhase: null,
+      lastStatus: 'stopped',
+      stoppedAfterStep,
+      partialReportReady: false,
+      currentStep: `Stopped after Step ${stoppedAfterStep}`,
+      progress: 'Stopped — not enough data for a report yet',
+    });
+    await log('warn', `=== Pipeline stopped after Step ${stoppedAfterStep} — no report (${outcome.reason}) ===`);
+    await _archive('stopped');
+  }
+}
+
 // ─── Full pipeline ───
-async function runFullPipeline(seedKeyword) {
-  await updateState({ running: true, currentStep: 'Initializing...', progress: '', lastStatus: null, logs: [] });
-  await log('info', `=== Starting Full Pipeline for: "${seedKeyword}" ===`);
+async function runFullPipeline(seedKeyword, resumeOpts = null) {
+  const resumeFrom = resumeOpts && resumeOpts.resumeFrom ? resumeOpts.resumeFrom : null;
+  const resumeStep = resumeFrom ? (parseInt(resumeFrom.lastCompletedStep, 10) || 0) : 0;
+
+  await updateState({
+    running: true,
+    stopping: false,
+    currentStep: resumeStep ? `Resuming from Step ${resumeStep + 1}…` : 'Initializing...',
+    progress: '',
+    lastStatus: null,
+    logs: [],
+    partialReportReady: false,
+    stoppedAfterStep: null,
+  });
+  await log('info', resumeStep
+    ? `=== Resuming Pipeline for: "${seedKeyword}" (after Step ${resumeStep}) ===`
+    : `=== Starting Full Pipeline for: "${seedKeyword}" ===`);
   let _archived = false;
   // Hoist these so _archive can read their latest values at archive time.
   let pipelineRunId = null;
@@ -443,7 +762,9 @@ async function runFullPipeline(seedKeyword) {
   // Defends against cross-niche contamination — listings inserted under a
   // prior seed but mapped to the current seed via shared keyword_ids no
   // longer surface in the report.
-  const pipelineStartedAt = new Date().toISOString();
+  const pipelineStartedAt = (resumeFrom && resumeFrom.pipelineStartedAt)
+    ? resumeFrom.pipelineStartedAt
+    : new Date().toISOString();
   const _archive = async (status) => {
     if (_archived) return;
     _archived = true;
@@ -451,7 +772,7 @@ async function runFullPipeline(seedKeyword) {
     // (fixes "runs stuck on running" bug).
     if (pipelineRunId && apiClient) {
       try {
-        const dbStatus = status === 'success' ? 'completed' : 'failed';
+        const dbStatus = (status === 'success' || status === 'stopped_partial') ? 'completed' : 'failed';
         await apiClient.updateRun(pipelineRunId, dbStatus);
       } catch (e) {
         console.warn('[ENR] updateRun at archive failed:', e.message);
@@ -552,7 +873,12 @@ async function runFullPipeline(seedKeyword) {
     // NES (default): title-funnel from Etsy itself — no eRank, so no login gate.
     // Legacy: eRank scraping, which requires an eRank session.
     const useNes = nesEnabled(config);
-    if (stopRequested) { await log('warn', '🛑 Pipeline stopped before Step 1'); await updateState({ running: false, progressCur: null, progressTotal: null, progressPhase: null, lastStatus: 'stopped' }); await _archive('stopped'); return; }
+    if (stopRequested) {
+      await log('warn', '🛑 Pipeline stopped before Step 1');
+      await updateState({ running: false, stopping: false, progressCur: null, progressTotal: null, progressPhase: null, lastStatus: 'stopped', progress: 'Stopped — not enough data for a report yet' });
+      await _archive('stopped');
+      return;
+    }
     await updateState({ currentStep: `Step 1: ${useNes ? 'Etsy Discovery' : 'eRank Keywords'} for "${seedKeyword}"` });
 
     if (!useNes) {
@@ -567,12 +893,25 @@ async function runFullPipeline(seedKeyword) {
 
     const checkStop = () => stopRequested;
 
-    const runStep1 = useNes ? runNesDiscovery : runErankKeywordResearch;
-    const step1 = await runStep1(apiClient, tabId, config, (type, msg) => {
-      log(type, `[Step 1] ${msg}`);
-      updateState({ progress: msg });
-    }, seedKeyword, checkStop);
-    await log('success', `Step 1 done: ${step1.newKeywordsFound} new keywords from "${seedKeyword}"`);
+    let step1 = { newKeywordsFound: 0, refreshedCount: 0 };
+    if (resumeStep >= 1) {
+      await log('info', `⏭️ Resume: skipping Step 1 (already completed)`);
+    } else {
+      const runStep1 = useNes ? runNesDiscovery : runErankKeywordResearch;
+      step1 = await runStep1(apiClient, tabId, config, (type, msg) => {
+        log(type, `[Step 1] ${msg}`);
+        updateState({ progress: msg });
+      }, seedKeyword, checkStop);
+      await log('success', `Step 1 done: ${step1.newKeywordsFound} new keywords from "${seedKeyword}"`);
+
+      if (stopRequested) {
+        await handlePipelineStop({
+          apiClient, config, seedKeyword, pipelineRunId, pipelineStartedAt,
+          stoppedAfterStep: 1, useNes, _archive,
+        });
+        return;
+      }
+    }
 
     // ─── Pre-Step-2 gate: Step 1 must surface enough keywords ───
     // If Step 1 didn't produce at least `min_qualified_keywords` usable keywords
@@ -627,35 +966,83 @@ async function runFullPipeline(seedKeyword) {
     }
 
     // Step 2: Etsy Search Snapshots
-    if (stopRequested) { await log('warn', '🛑 Pipeline stopped after Step 1'); await updateState({ running: false, progressCur: null, progressTotal: null, progressPhase: null, lastStatus: 'stopped' }); await _archive('stopped'); return; }
-    await updateState({ currentStep: `Step 2: Etsy Snapshots for "${seedKeyword}"` });
+    if (stopRequested) {
+      await handlePipelineStop({
+        apiClient, config, seedKeyword, pipelineRunId, pipelineStartedAt,
+        stoppedAfterStep: 1, useNes, _archive,
+      });
+      return;
+    }
 
-    const step2 = await runEtsySearchSnapshots(apiClient, tabId, config, (type, msg) => {
-      log(type, `[Step 2] ${msg}`);
-      updateState({ progress: msg });
-    }, seedKeyword, checkStop, { pipelineRunId });
-    await log('success', `Step 2 done: ${step2.listingsFound} listings from ${step2.keywordsProcessed} keywords — ${step2.qualifiedCount || 0}/${step2.totalProcessed || 0} keywords qualified`);
+    let step2 = { listingsFound: 0, keywordsProcessed: 0, qualifiedCount: 0, totalProcessed: 0, nicheQualified: true };
+    if (resumeStep >= 2) {
+      await log('info', `⏭️ Resume: skipping Step 2 (already completed)`);
+      try {
+        const nq = (await chrome.storage.local.get('nicheQualification')).nicheQualification;
+        if (nq && nq.seedKeyword === seedKeyword) {
+          step2 = {
+            listingsFound: nq.totalListings || 0,
+            keywordsProcessed: nq.totalProcessed || 0,
+            qualifiedCount: nq.qualifiedCount || 0,
+            totalProcessed: nq.totalProcessed || 0,
+            nicheQualified: !!nq.nicheQualified,
+          };
+        }
+      } catch (_) {}
+    } else {
+      await updateState({ currentStep: `Step 2: Etsy Snapshots for "${seedKeyword}"` });
+
+      step2 = await runEtsySearchSnapshots(apiClient, tabId, config, (type, msg) => {
+        log(type, `[Step 2] ${msg}`);
+        updateState({ progress: msg });
+      }, seedKeyword, checkStop, { pipelineRunId });
+      await log('success', `Step 2 done: ${step2.listingsFound} listings from ${step2.keywordsProcessed} keywords — ${step2.qualifiedCount || 0}/${step2.totalProcessed || 0} keywords qualified`);
+
+      if (stopRequested) {
+        await handlePipelineStop({
+          apiClient, config, seedKeyword, pipelineRunId, pipelineStartedAt,
+          stoppedAfterStep: 2, useNes, _archive,
+        });
+        return;
+      }
+    }
 
     // Check niche qualification — if not enough qualified keywords, skip Steps 3 & 4 audit
     // but still generate a NO-GO report in Step 4
     let step3 = { audited: 0 };
 
     if (step2.nicheQualified) {
-      // Step 3: eRank Listing Audit (only if niche qualified)
-      if (stopRequested) { await log('warn', '🛑 Pipeline stopped after Step 2'); await updateState({ running: false, progressCur: null, progressTotal: null, progressPhase: null, lastStatus: 'stopped' }); await _archive('stopped'); return; }
-      await updateState({ currentStep: `Step 3: Listing Audit for "${seedKeyword}"` });
+      if (resumeStep >= 3) {
+        await log('info', `⏭️ Resume: skipping Step 3 (already completed)`);
+      } else {
+        await updateState({ currentStep: `Step 3: Listing Audit for "${seedKeyword}"` });
 
-      step3 = await runErankListingAudit(apiClient, tabId, config, (type, msg) => {
-        log(type, `[Step 3] ${msg}`);
-        updateState({ progress: msg });
-      }, seedKeyword, checkStop);
-      await log('success', `Step 3 done: ${step3.audited} listings audited`);
+        step3 = await runErankListingAudit(apiClient, tabId, config, (type, msg) => {
+          log(type, `[Step 3] ${msg}`);
+          updateState({ progress: msg });
+        }, seedKeyword, checkStop);
+        await log('success', `Step 3 done: ${step3.audited} listings audited`);
+
+        if (stopRequested) {
+          await handlePipelineStop({
+            apiClient, config, seedKeyword, pipelineRunId, pipelineStartedAt,
+            stoppedAfterStep: 3, useNes, _archive,
+          });
+          return;
+        }
+      }
     } else {
       await log('warn', `⏭️ Skipping Step 3 — niche "${seedKeyword}" did not qualify (${step2.qualifiedCount || 0}/${step2.totalProcessed || 0} keywords)`);
     }
 
     // Step 4: Niche Verdict & Report (always runs — generates GO or NO-GO report)
-    if (stopRequested) { await log('warn', '🛑 Pipeline stopped after Step 3'); await updateState({ running: false, progressCur: null, progressTotal: null, progressPhase: null, lastStatus: 'stopped' }); await _archive('stopped'); return; }
+    if (stopRequested) {
+      await handlePipelineStop({
+        apiClient, config, seedKeyword, pipelineRunId, pipelineStartedAt,
+        stoppedAfterStep: step2.nicheQualified ? 3 : 2, useNes, _archive,
+      });
+      return;
+    }
     await updateState({ currentStep: `Step 4: Verdict & Report for "${seedKeyword}"` });
 
     const runStep4 = useNes ? runNesScoring : runNicheScoring;
@@ -678,8 +1065,9 @@ async function runFullPipeline(seedKeyword) {
     }
 
     // Done!
-    const verdict = step2.nicheQualified ? 'GO' : 'NO-GO';
-    await updateState({ running: false, currentStep: `Pipeline Complete: "${seedKeyword}" — ${verdict}`, lastStatus: 'success',
+    await clearPipelineCheckpoint();
+    const verdict = (step4 && step4.verdict) || (step2.nicheQualified ? 'GO' : 'NO-GO');
+    await updateState({ running: false, stopping: false, currentStep: `Pipeline Complete: "${seedKeyword}" — ${verdict}`, lastStatus: 'success',
       progress: `Keywords: ${(step1.newKeywordsFound || 0) + (step1.refreshedCount || 0)} (${step1.newKeywordsFound || 0} new + ${step1.refreshedCount || 0} refreshed), Listings: ${step2.listingsFound}, Qualified: ${step2.qualifiedCount || 0}/${step2.totalProcessed || 0}, Verdict: ${verdict}` });
     await chrome.storage.local.set({ lastRunTime: Date.now() });
     await log('success', `=== Pipeline Complete for "${seedKeyword}" — Verdict: ${verdict} ===`);
@@ -687,9 +1075,10 @@ async function runFullPipeline(seedKeyword) {
 
   } catch (err) {
     await log('error', `Pipeline error: ${err.message}`);
-    await updateState({ running: false, progressCur: null, progressTotal: null, progressPhase: null, lastStatus: 'error', progress: err.message });
+    await updateState({ running: false, stopping: false, progressCur: null, progressTotal: null, progressPhase: null, lastStatus: 'error', progress: err.message });
     await _archive('error');
   } finally {
+    activePipelineCtx = null;
     // Always release the keepalive so idle Chrome can suspend the worker
     // normally between runs. Safe to call even if startKeepalive errored.
     stopKeepalive();
@@ -768,6 +1157,20 @@ async function runSingleStep(stepNum, seedKeyword) {
         result = await runEtsySearchSnapshots(apiClient, tabId, config, logFn, seedKeyword, checkStop, { pipelineRunId: soloRunId });
       }
       else if (stepNum === 3) result = await runErankListingAudit(apiClient, tabId, config, logFn, seedKeyword, checkStop);
+
+      if (stopRequested && stepNum >= 1) {
+        await handlePipelineStop({
+          apiClient,
+          config,
+          seedKeyword,
+          pipelineRunId: standaloneRunId,
+          pipelineStartedAt: new Date().toISOString(),
+          stoppedAfterStep: stepNum,
+          useNes: nesEnabled(config),
+          _archive,
+        });
+        return;
+      }
     } else {
       // Standalone Step 4: locate this user's most recent run for this seed so
       // the fallback read of user_keyword_results has something to scope to.

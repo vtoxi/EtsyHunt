@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "EtsyHunt — Etsy Niche Research",
   "short_name": "EtsyHunt",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Free local Etsy niche research: find keywords, audit listings, and download scored niche reports.",
   "author": "EtsyHunt",
   "homepage_url": "https://github.com/vtoxi/EtsyHunt",

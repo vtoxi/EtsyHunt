@@ -11,6 +11,13 @@
 
 import { isJunkKeyword } from './etsy-snapshot-workflow.js';
 import { EXT_NAME, extVersionLabel } from '../utils/brand.js';
+import { deliverReport } from '../utils/report-delivery.js';
+import {
+  completedStepsFor,
+  partialBannerHtml,
+  partialDisplayVerdict,
+  partialScoreStatus,
+} from '../utils/partial-report.js';
 
 export async function runNicheScoring(sheetsClient, config, log, seedKeyword, opts = {}) {
   const started = new Date().toISOString();
@@ -27,6 +34,16 @@ export async function runNicheScoring(sheetsClient, config, log, seedKeyword, op
     } catch (err) {
       log('error', `NO-GO short-report failed: ${err.message}`);
       return { verdict: 'NO-GO', qualifiedCount: 0, totalProcessed: 0, reportsGenerated: 0 };
+    }
+  }
+
+  // User stopped after Step 1 (or Step 2 with no listings) — keyword table only.
+  if (opts && opts.partialKeywordsOnly) {
+    try {
+      return await runPartialKeywordReport(sheetsClient, config, log, seedKeyword, opts);
+    } catch (err) {
+      log('error', `Partial keyword report failed: ${err.message}`);
+      return { verdict: 'PARTIAL — keywords only', qualifiedCount: 0, totalProcessed: 0, reportsGenerated: 0, partial: true };
     }
   }
 
@@ -279,7 +296,17 @@ export async function runNicheScoring(sheetsClient, config, log, seedKeyword, op
     // Verdict: prefer Step 2's explicit nicheQualified flag (if present) so we
     // never contradict it. Only re-derive when there's no Step 2 result at all.
     const nicheQualified = qual ? !!qual.nicheQualified : (qualifiedCount >= minQualifiedKw);
-    const verdict = nicheQualified ? 'GO' : 'NO-GO';
+    const underlyingVerdict = nicheQualified ? 'GO' : 'NO-GO';
+    const isPartial = !!(opts && opts.partial);
+    const stoppedAfterStep = (opts && opts.stoppedAfterStep) || null;
+    const verdict = isPartial
+      ? partialDisplayVerdict({
+          stoppedAfterStep,
+          underlyingVerdict,
+          gateSkip: qual && qual.nicheQualified === false,
+          hasAudits: audits.length > 0,
+        })
+      : underlyingVerdict;
 
     // ─── Report keyword filter (2026-06-04) ───
     // Reports surface ONLY keywords that pass the user's Step-1 thresholds:
@@ -357,7 +384,7 @@ export async function runNicheScoring(sheetsClient, config, log, seedKeyword, op
       avg_searches: avgSearches.toFixed(0),
       weak_competitor_pct: weakPct.toFixed(1),
       readiness_score: qualifiedCount + '/' + totalProcessed,
-      status: verdict,
+      status: isPartial ? partialScoreStatus(underlyingVerdict) : underlyingVerdict,
       report_url: '',
       scored_at: now
     }]);
@@ -395,42 +422,32 @@ export async function runNicheScoring(sheetsClient, config, log, seedKeyword, op
         product_type_filter: productTypeFilter,
       };
 
-      const html = generateNicheReport(niche, keywords, dedupedListings, audits, keywordResults, shopLookup, scoredKeywords);
-      const filename = `etsyhunt_${seedKeyword.replace(/\s+/g, '_')}_${now.split('T')[0]}.html`;
-      const dataUrl = 'data:text/html;charset=utf-8,' + encodeURIComponent(html);
-      await chrome.downloads.download({ url: dataUrl, filename, saveAs: false });
+      const html = generateNicheReport(niche, keywords, dedupedListings, audits, keywordResults, shopLookup, scoredKeywords, {
+        partial: isPartial,
+        stoppedAfterStep,
+        underlyingVerdict,
+      });
+      const partialSuffix = isPartial ? '_partial' : '';
+      const filename = `etsyhunt_${seedKeyword.replace(/\s+/g, '_')}_${now.split('T')[0]}${partialSuffix}.html`;
+      await deliverReport(html, {
+        filename,
+        seedKeyword,
+        verdict,
+        reportType: isPartial ? 'partial' : 'full',
+        partial: isPartial,
+        stoppedAfterStep,
+        completedSteps: isPartial ? completedStepsFor(stoppedAfterStep) : ['discovery', 'snapshots', 'audits', 'scoring'],
+      }, log);
       reportsGenerated = 1;
-      log('success', `📄 Report downloaded: ${filename}`);
     } catch (e) {
-      log('warn', `Report download failed: ${e.message}`);
-      try {
-        const niche = {
-          seed_keyword: seedKeyword, category: seed.category, product_type: productType,
-          total_keywords: totalKw, qualified_keywords: qualifiedCount, total_processed: totalProcessed,
-          total_listings: totalListings, total_shops: totalShops,
-          avg_price: avgPrice.toFixed(2), avg_competition: avgComp.toFixed(0),
-          avg_searches: avgSearches.toFixed(0), weak_competitor_pct: weakPct.toFixed(1),
-          has_audits: hasAudits,
-          verdict, min_qualified_kw: minQualifiedKw,
-          max_shop_reviews_beatable: maxShopReviewsBeatable, min_beatable_slots: minBeatableSlots,
-          max_listings_per_kw: maxListingsPerKw,
-          min_winner_score: minWinnerScore,
-          product_type_filter: productTypeFilter,
-        };
-        const dataUrl = 'data:text/html;charset=utf-8,' + encodeURIComponent(
-          generateNicheReport(niche, keywords, dedupedListings, audits, keywordResults, shopLookup, scoredKeywords));
-        await chrome.tabs.create({ url: dataUrl, active: true });
-        reportsGenerated = 1;
-      } catch (e2) {
-        log('error', `Could not open report: ${e2.message}`);
-      }
+      log('error', `Report generation failed: ${e.message}`);
     }
 
     await sheetsClient.logRun('niche_scoring', 'SUCCESS', 1, 1, 0, '',
       `Seed: "${seedKeyword}", Verdict: ${verdict}, Qualified: ${qualifiedCount}/${totalProcessed}`);
 
     log('success', `🏁 Step 4 DONE! "${seedKeyword}" → ${verdict}`);
-    return { verdict, qualifiedCount, totalProcessed, reportsGenerated };
+    return { verdict, underlyingVerdict, qualifiedCount, totalProcessed, reportsGenerated, partial: isPartial };
 
   } catch (err) {
     log('error', `Step 4 failed: ${err.message}`);
@@ -631,7 +648,7 @@ function computeKeywordOpportunityScores(keywords, keywordResults, audits, dedup
   return scored;
 }
 
-function generateNicheReport(niche, nicheKeywords, nicheListings, nicheAudits, keywordResults, shopLookup = {}, scoredKeywords = []) {
+function generateNicheReport(niche, nicheKeywords, nicheListings, nicheAudits, keywordResults, shopLookup = {}, scoredKeywords = [], reportOpts = {}) {
   const esc = (str) => String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   const MUTED = '<span class="muted">—</span>';
 
@@ -706,13 +723,17 @@ function generateNicheReport(niche, nicheKeywords, nicheListings, nicheAudits, k
   };
 
   // ─── Verdict ───
-  const isGo = niche.verdict === 'GO';
-  const verdictColor = isGo ? '#10b981' : '#ef4444';
-  const verdictBg = isGo
+  const isPartialReport = !!(reportOpts && reportOpts.partial);
+  const underlying = (reportOpts && reportOpts.underlyingVerdict) || (niche.verdict === 'GO' || niche.verdict === 'NO-GO' ? niche.verdict : null);
+  const isGo = niche.verdict === 'GO' || underlying === 'GO';
+  const verdictColor = isPartialReport ? '#d97706' : (isGo ? '#10b981' : '#ef4444');
+  const verdictBg = isPartialReport
+    ? 'linear-gradient(135deg,#f59e0b 0%,#d97706 100%)'
+    : (isGo
     ? 'linear-gradient(135deg,#10b981 0%,#059669 100%)'
-    : 'linear-gradient(135deg,#ef4444 0%,#dc2626 100%)';
-  const verdictIcon = isGo ? '✓' : '✗';
-  const verdictShadow = isGo ? 'rgba(16,185,129,0.25)' : 'rgba(239,68,68,0.25)';
+    : 'linear-gradient(135deg,#ef4444 0%,#dc2626 100%)');
+  const verdictIcon = isPartialReport ? '⏸' : (isGo ? '✓' : '✗');
+  const verdictShadow = isPartialReport ? 'rgba(217,119,6,0.25)' : (isGo ? 'rgba(16,185,129,0.25)' : 'rgba(239,68,68,0.25)');
 
   const qualRate = niche.total_processed > 0 ? (niche.qualified_keywords / niche.total_processed) : 0;
   const insufficientData = niche.total_processed < niche.min_qualified_kw;
@@ -1490,9 +1511,16 @@ footer { color: var(--muted); text-align: center; margin-top: 40px; font-size: 1
 }
 </style></head><body>
 
+${isPartialReport ? partialBannerHtml({
+  stoppedAfterStep: reportOpts.stoppedAfterStep,
+  keywordCount: niche.total_keywords,
+  listingCount: niche.total_listings,
+  esc,
+}) : ''}
+
 <div class="verdict-header">
   <h1>Niche Report: ${esc(niche.seed_keyword)}</h1>
-  <p class="meta">Category: ${esc(niche.category)}  ·  Product type: ${esc(niche.product_type)}</p>
+  <p class="meta">Category: ${esc(niche.category)}  ·  Product type: ${esc(niche.product_type)}${isPartialReport ? '  ·  Partial' : ''}</p>
   <div class="verdict-row">
     <div class="verdict-icon">${verdictIcon}</div>
     <div>
@@ -1571,7 +1599,7 @@ ${demandBannerHtml}
 // keywords to make Step 2 worth running. Keyword table + banner only — no
 // listings, no audits, no concepts. The user guidance at the top explains
 // exactly what to do next (lower the min, pick a new seed, or re-run).
-async function runInsufficientKeywordsReport(sheetsClient, config, log, seedKeyword, opts) {
+export async function runInsufficientKeywordsReport(sheetsClient, config, log, seedKeyword, opts) {
   log('info', `📭 Generating NO-GO report for "${seedKeyword}" — Step 1 yielded ${opts.availableCount} of ${opts.minRequired} required keywords`);
 
   let dbConfig = {};
@@ -1654,28 +1682,179 @@ async function runInsufficientKeywordsReport(sheetsClient, config, log, seedKeyw
 
   const html = generateInsufficientKeywordsReport(seedKeyword, seed, reportKeywords, opts);
   const filename = `etsyhunt_${seedKeyword.replace(/\s+/g, '_')}_${now.split('T')[0]}_NOGO.html`;
-  const dataUrl = 'data:text/html;charset=utf-8,' + encodeURIComponent(html);
 
-  let reportsGenerated = 0;
-  try {
-    await chrome.downloads.download({ url: dataUrl, filename, saveAs: false });
-    reportsGenerated = 1;
-    log('success', `📄 NO-GO report downloaded: ${filename}`);
-  } catch (e) {
-    log('warn', `NO-GO report download failed: ${e.message} — opening in tab`);
-    try {
-      await chrome.tabs.create({ url: dataUrl, active: true });
-      reportsGenerated = 1;
-    } catch (e2) {
-      log('error', `Could not open NO-GO report: ${e2.message}`);
-    }
-  }
+  await deliverReport(html, {
+    filename,
+    seedKeyword,
+    verdict: 'NO-GO',
+    reportType: 'insufficient-keywords',
+  }, log);
 
   await sheetsClient.logRun('niche_scoring', 'SUCCESS', 1, 0, 0, '',
     `Seed: "${seedKeyword}", Verdict: NO-GO (insufficient keywords ${opts.availableCount}/${opts.minRequired})`);
 
   log('warn', `🏁 Step 4 DONE! "${seedKeyword}" → NO-GO (insufficient keywords)`);
-  return { verdict: 'NO-GO', qualifiedCount: 0, totalProcessed: keywords.length, reportsGenerated };
+  return { verdict: 'NO-GO', qualifiedCount: 0, totalProcessed: keywords.length, reportsGenerated: 1 };
+}
+
+/**
+ * Phase 2: user stopped after Step 1 (or had keywords but no listings).
+ * Keyword table only — clearly labeled as a user-stopped partial, not a threshold NO-GO.
+ */
+export async function runPartialKeywordReport(sheetsClient, config, log, seedKeyword, opts = {}) {
+  log('info', `📄 Building partial keyword report for "${seedKeyword}" (stopped after Step ${opts.stoppedAfterStep || 1})`);
+
+  let dbConfig = {};
+  try { dbConfig = await sheetsClient.readConfig() || {}; } catch (e) { dbConfig = {}; }
+  const pickCfg = (key, fallback) => {
+    const popup = config != null ? config[key] : undefined;
+    if (popup !== undefined && popup !== null && popup !== '') return popup;
+    const db = dbConfig != null ? dbConfig[key] : undefined;
+    if (db !== undefined && db !== null && db !== '') return db;
+    return fallback;
+  };
+  const FRESH_HOURS = parseInt(
+    pickCfg('data_staleness_hours', null)
+    ?? pickCfg('keyword_freshness_hours', null)
+    ?? 48
+  ) || 48;
+
+  const seedsData = await sheetsClient.readSheet('seed_keywords');
+  const seed = seedsData.rows.find(s => (s.keyword || '').toLowerCase().trim() === seedKeyword.toLowerCase().trim());
+  if (!seed) {
+    log('error', `Seed "${seedKeyword}" not found — cannot render partial keyword report`);
+    return { verdict: 'PARTIAL — keywords only', reportsGenerated: 0, partial: true };
+  }
+
+  const seedId = String(seed.seed_id);
+  const keywordsData = await sheetsClient.readSheet('etsy_keywords', { seed_id: seedId }, { sinceHours: FRESH_HOURS, sinceColumn: 'updated_at' });
+  const keywords = keywordsData.rows.filter(k => String(k.seed_id) === seedId);
+  const reportKeywords = keywords.filter(k => {
+    const kw = (k.keyword || '').trim();
+    return kw && !isJunkKeyword(kw);
+  });
+
+  const now = new Date().toISOString();
+  const verdict = 'PARTIAL — keywords only';
+  try {
+    await sheetsClient.appendRowsByName('niche_scores', [{
+      run_id: opts.pipelineRunId || null,
+      category: seed.category || '',
+      seed_keyword: seedKeyword,
+      product_type: 'unknown',
+      total_keywords: reportKeywords.length,
+      validated_keywords: 0,
+      total_listings: 0,
+      total_shops: 0,
+      avg_price: '0.00',
+      avg_competition: '0',
+      avg_searches: '0',
+      weak_competitor_pct: '0.0',
+      readiness_score: `${reportKeywords.length}/partial`,
+      status: 'PARTIAL',
+      report_url: '',
+      scored_at: now,
+    }]);
+  } catch (e) {
+    log('warn', `niche_scores write failed on partial keyword report: ${e.message}`);
+  }
+
+  const html = generatePartialKeywordReport(seedKeyword, seed, reportKeywords, opts);
+  const filename = `etsyhunt_${seedKeyword.replace(/\s+/g, '_')}_${now.split('T')[0]}_partial.html`;
+  await deliverReport(html, {
+    filename,
+    seedKeyword,
+    verdict,
+    reportType: 'partial',
+    partial: true,
+    stoppedAfterStep: opts.stoppedAfterStep || 1,
+    completedSteps: completedStepsFor(opts.stoppedAfterStep || 1),
+  }, log);
+
+  log('warn', `🏁 Partial keyword report ready for "${seedKeyword}" (${reportKeywords.length} keywords)`);
+  return { verdict, reportsGenerated: 1, partial: true, scoredCount: 0, enterable: 0 };
+}
+
+function generatePartialKeywordReport(seedKeyword, seed, keywords, opts) {
+  const esc = (str) => String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const fmt = (v) => {
+    if (v === null || v === undefined || v === '') return '—';
+    const n = Number(v);
+    if (!Number.isFinite(n)) return esc(String(v));
+    return n.toLocaleString();
+  };
+  const sorted = [...keywords].sort((a, b) => (parseFloat(b.avg_searches) || 0) - (parseFloat(a.avg_searches) || 0));
+  const kwRowsHtml = sorted.length === 0
+    ? `<tr><td colspan="5" class="empty">No keywords were captured before you stopped.</td></tr>`
+    : sorted.map(k => `
+        <tr>
+          <td class="kw">${esc(k.keyword || '')}</td>
+          <td class="num">${fmt(k.avg_searches)}</td>
+          <td class="num">${fmt(k.competition)}</td>
+          <td class="num">${fmt(k.click_rate)}</td>
+          <td class="status ${esc((k.status || 'pending').toLowerCase())}">${esc(k.status || 'pending')}</td>
+        </tr>`).join('');
+  const step = opts.stoppedAfterStep || 1;
+  const banner = partialBannerHtml({
+    stoppedAfterStep: step,
+    keywordCount: keywords.length,
+    listingCount: 0,
+    esc,
+  });
+
+  return `<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<title>Partial Report — ${esc(seedKeyword)}</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, 'Segoe UI', Arial, sans-serif; background: #f4f5f7; color: #222; margin: 0; padding: 32px 24px; }
+  .container { max-width: 960px; margin: 0 auto; }
+  .card { background: #fff; border: 1px solid #e5e7eb; border-radius: 10px; padding: 20px 24px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
+  .card h2 { margin: 0 0 12px; font-size: 17px; color: #92400e; }
+  .card p { margin: 8px 0; line-height: 1.55; color: #374151; font-size: 14px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #eef0f2; }
+  th { background: #f9fafb; font-weight: 600; color: #475569; text-transform: uppercase; font-size: 11px; letter-spacing: 0.3px; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.kw { font-weight: 500; color: #1f2937; }
+  td.status { text-transform: capitalize; font-size: 12px; }
+  td.empty { text-align: center; color: #9ca3af; font-style: italic; padding: 32px 12px; }
+  .meta { display: flex; gap: 20px; font-size: 13px; color: #64748b; margin-top: 12px; flex-wrap: wrap; }
+  .meta span strong { color: #1f2937; }
+  .footer { text-align: center; font-size: 11px; color: #9ca3af; margin-top: 20px; }
+  .verdict { font-size: 20px; font-weight: 700; color: #92400e; margin: 0 0 8px; }
+</style>
+</head><body>
+<div class="container">
+  ${banner}
+  <div class="card">
+    <div class="verdict">PARTIAL — keywords only</div>
+    <p>You stopped after Step ${esc(step)}. Snapshots and listing audits were not finished, so this report lists the keywords discovered so far — not a full GO / NO-GO verdict.</p>
+  </div>
+  <div class="card">
+    <h2>Keywords captured for "${esc(seedKeyword)}" (${keywords.length})</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Keyword</th>
+          <th class="num">Avg searches</th>
+          <th class="num">Competition</th>
+          <th class="num">Click rate</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>${kwRowsHtml}</tbody>
+    </table>
+    <div class="meta">
+      <span>Seed ID: <strong>${esc(seed.seed_id || '—')}</strong></span>
+      <span>Category: <strong>${esc(seed.category || '—')}</strong></span>
+      <span>Generated: <strong>${esc(new Date().toLocaleString())}</strong></span>
+    </div>
+  </div>
+  <div class="footer">${EXT_NAME} — partial report (stopped by user)</div>
+</div>
+</body></html>`;
 }
 
 function generateInsufficientKeywordsReport(seedKeyword, seed, keywords, opts) {
