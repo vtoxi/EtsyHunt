@@ -34,6 +34,10 @@
 import { EXT_NAME, EXT_SITE, extVersionLabel } from '../utils/brand.js';
 import { deliverReport } from '../utils/report-delivery.js';
 import {
+  runInsufficientKeywordsReport,
+  runPartialKeywordReport,
+} from './niche-scoring-workflow.js';
+import {
   completedStepsFor,
   partialBannerHtml,
   partialDisplayVerdict,
@@ -97,11 +101,9 @@ function esc(s) {
 
 export async function runNesScoring(sheetsClient, config, log, seedKeyword, opts = {}) {
   if (opts && opts.insufficientKeywords) {
-    const { runInsufficientKeywordsReport } = await import('./niche-scoring-workflow.js');
     return runInsufficientKeywordsReport(sheetsClient, config, log, seedKeyword, opts);
   }
   if (opts && opts.partialKeywordsOnly) {
-    const { runPartialKeywordReport } = await import('./niche-scoring-workflow.js');
     return runPartialKeywordReport(sheetsClient, config, log, seedKeyword, opts);
   }
 
