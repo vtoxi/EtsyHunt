@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>EtsyHunt Report</title>
+  <style>
+    body { margin: 0; font-family: system-ui, sans-serif; background: #1a1612; color: #e8e0d4; }
+    .bar {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      padding: 10px 16px; background: #2a241e; border-bottom: 1px solid #3d352c;
+      position: sticky; top: 0; z-index: 10;
+    }
+    .bar h1 { margin: 0; font-size: 14px; font-weight: 600; }
+    .bar p { margin: 2px 0 0; font-size: 12px; color: #a89f92; }
+    .badge {
+      display: inline-block; margin-left: 8px; padding: 1px 8px; border-radius: 999px;
+      font-size: 10px; font-weight: 700; letter-spacing: 0.04em; vertical-align: middle;
+      background: #92400e; color: #ffedd5;
+    }
+    .actions { display: flex; gap: 8px; }
+    button {
+      border: 1px solid #4a433a; background: #3d352c; color: #f5efe6;
+      border-radius: 8px; padding: 7px 12px; font-size: 12px; cursor: pointer;
+    }
+    button.primary { background: #d97706; border-color: #b45309; color: #fff; }
+    button:hover { filter: brightness(1.08); }
+    .empty { padding: 48px 24px; text-align: center; color: #a89f92; }
+    iframe { width: 100%; height: calc(100vh - 57px); border: 0; background: #fff; }
+  </style>
+</head>
+<body>
+  <div class="bar">
+    <div>
+      <h1 id="title">EtsyHunt report</h1>
+      <p id="subtitle">Loading…</p>
+    </div>
+    <div class="actions">
+      <button id="btn-download" class="primary" type="button">Download HTML</button>
+      <button id="btn-close" type="button">Close</button>
+    </div>
+  </div>
+  <div id="empty" class="empty" style="display:none">No report found. Run Step 4 or the full pipeline first.</div>
+  <iframe id="frame" title="EtsyHunt niche report" style="display:none"></iframe>
+  <script src="viewer.js"></script>
+</body>
+</html>
